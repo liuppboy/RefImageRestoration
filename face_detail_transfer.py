@@ -38,10 +38,11 @@ def odd_kernel(value: int) -> int:
     return value if value % 2 == 1 else value + 1
 
 
-def extract_luminance_detail(l_channel: np.ndarray, radius: int) -> np.ndarray:
+def extract_luminance_detail(l_channel: np.ndarray, sigma: float) -> np.ndarray:
     source = l_channel.astype(np.float32)
-    kernel = odd_kernel(radius * 2 + 1)
-    base = cv2.GaussianBlur(source, (kernel, kernel), sigmaX=radius, sigmaY=radius)
+    sigma = max(0.1, float(sigma))
+    kernel = odd_kernel(int(round(sigma * 6)) + 1)
+    base = cv2.GaussianBlur(source, (kernel, kernel), sigmaX=sigma, sigmaY=sigma)
     return source - base
 
 
@@ -51,13 +52,10 @@ def fuse_luminance_detail(
     mask: np.ndarray,
     alpha: float,
     max_detail: float = 24.0,
-    detail_gain: float = 1.0,
-    mask_gamma: float = 1.0,
 ) -> np.ndarray:
     target = target_l.astype(np.float32)
-    clipped_detail = np.clip(detail.astype(np.float32) * float(detail_gain), -max_detail, max_detail)
+    clipped_detail = np.clip(detail.astype(np.float32), -max_detail, max_detail)
     soft_mask = np.clip(mask.astype(np.float32), 0.0, 1.0)
-    soft_mask = np.power(soft_mask, max(0.05, float(mask_gamma)))
     fused = target + float(alpha) * soft_mask * clipped_detail
     return np.clip(fused, 0, 255).astype(np.float32)
 
@@ -75,26 +73,6 @@ def build_feather_mask(binary_mask: np.ndarray, erode_px: int, feather_px: int) 
     dist = cv2.distanceTransform(binary, cv2.DIST_L2, 5)
     mask = np.clip(dist / float(feather_px), 0.0, 1.0)
     return mask.astype(np.float32)
-
-
-def guided_filter_gray(guide: np.ndarray, src: np.ndarray, radius: int, eps: float) -> np.ndarray:
-    guide_f = guide.astype(np.float32) / 255.0
-    src_f = src.astype(np.float32)
-    ksize = (radius * 2 + 1, radius * 2 + 1)
-
-    mean_i = cv2.boxFilter(guide_f, cv2.CV_32F, ksize, normalize=True)
-    mean_p = cv2.boxFilter(src_f, cv2.CV_32F, ksize, normalize=True)
-    corr_i = cv2.boxFilter(guide_f * guide_f, cv2.CV_32F, ksize, normalize=True)
-    corr_ip = cv2.boxFilter(guide_f * src_f, cv2.CV_32F, ksize, normalize=True)
-
-    var_i = corr_i - mean_i * mean_i
-    cov_ip = corr_ip - mean_i * mean_p
-    a = cov_ip / (var_i + eps)
-    b = mean_p - a * mean_i
-
-    mean_a = cv2.boxFilter(a, cv2.CV_32F, ksize, normalize=True)
-    mean_b = cv2.boxFilter(b, cv2.CV_32F, ksize, normalize=True)
-    return (mean_a * guide_f + mean_b).astype(np.float32)
 
 
 def load_insightface(model_name: str, models_dir: str | Path, det_size: int, providers: list[str]):
@@ -283,37 +261,16 @@ def build_face_hull_mask(landmarks: np.ndarray, shape: tuple[int, int]) -> np.nd
     return mask
 
 
-def build_similarity_mask(
-    warped_source_l: np.ndarray,
-    target_l: np.ndarray,
-    sigma: float,
-    blur_radius: int,
-) -> np.ndarray:
-    radius = max(3, int(blur_radius))
-    kernel = odd_kernel(radius * 2 + 1)
-    source_low = cv2.GaussianBlur(warped_source_l.astype(np.float32), (kernel, kernel), radius)
-    target_low = cv2.GaussianBlur(target_l.astype(np.float32), (kernel, kernel), radius)
-    diff = np.abs(source_low - target_low)
-    sigma = max(1.0, float(sigma))
-    sim = np.exp(-(diff * diff) / (2.0 * sigma * sigma))
-    return sim.astype(np.float32)
-
-
 def enhance_face_detail(
     source_bgr: np.ndarray,
     target_bgr: np.ndarray,
     source_face: FaceInfo,
     target_face: FaceInfo,
-    alpha: float = 0.75,
-    detail_radius: int = 4,
-    max_detail: float = 48.0,
-    detail_gain: float = 2.0,
-    mask_gamma: float = 0.6,
-    mask_erode: int = 6,
-    mask_feather: int = 24,
-    sim_sigma: float = 45.0,
-    sim_blur_radius: int = 15,
-    guided_mask_radius: int = 8,
+    alpha: float = 0.28,
+    detail_sigma: float = 1.6,
+    max_detail: float = 18.0,
+    mask_erode: int = 8,
+    mask_feather: int = 36,
 ) -> tuple[np.ndarray, np.ndarray]:
     if source_bgr.shape[:2] != target_bgr.shape[:2]:
         source_bgr = cv2.resize(source_bgr, (target_bgr.shape[1], target_bgr.shape[0]), interpolation=cv2.INTER_CUBIC)
@@ -333,23 +290,15 @@ def enhance_face_detail(
 
     face_mask_binary = build_face_hull_mask(target_face.landmarks, target_bgr.shape[:2])
     face_mask_binary = cv2.bitwise_and(face_mask_binary, coverage)
-    face_mask = build_feather_mask(face_mask_binary, erode_px=mask_erode, feather_px=mask_feather)
-    similarity_mask = build_similarity_mask(warped_l, target_l, sigma=sim_sigma, blur_radius=sim_blur_radius)
+    final_mask = build_feather_mask(face_mask_binary, erode_px=mask_erode, feather_px=mask_feather)
 
-    final_mask = np.clip(face_mask * similarity_mask, 0.0, 1.0)
-    if guided_mask_radius > 0:
-        final_mask = guided_filter_gray(target_l, final_mask, radius=guided_mask_radius, eps=1e-4)
-        final_mask = np.clip(final_mask, 0.0, 1.0)
-
-    detail = extract_luminance_detail(warped_l, radius=detail_radius)
+    detail = extract_luminance_detail(warped_l, sigma=detail_sigma)
     target_lab[:, :, 0] = fuse_luminance_detail(
         target_l,
         detail,
         final_mask,
         alpha=alpha,
         max_detail=max_detail,
-        detail_gain=detail_gain,
-        mask_gamma=mask_gamma,
     )
 
     enhanced = cv2.cvtColor(np.clip(target_lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
@@ -371,17 +320,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model-name", default="buffalo_l", help="InsightFace model pack name.")
     parser.add_argument("--providers", default="CPUExecutionProvider", help="ONNX Runtime providers.")
     parser.add_argument("--det-size", type=int, default=640, help="InsightFace detection size.")
-    parser.add_argument("--alpha", type=float, default=0.75, help="Detail transfer strength.")
-    parser.add_argument("--detail-radius", type=int, default=4, help="High-frequency extraction blur radius.")
-    parser.add_argument("--max-detail", type=float, default=48.0, help="Clamp source detail magnitude in LAB-L units.")
-    parser.add_argument("--detail-gain", type=float, default=2.0, help="Amplify source high-frequency detail before clamping.")
-    parser.add_argument("--mask-gamma", type=float, default=0.6, help="Gamma applied to the soft mask; values below 1 make weak mask areas stronger.")
-    parser.add_argument("--mask-erode", type=int, default=6, help="Shrink face mask inward before feathering.")
-    parser.add_argument("--mask-feather", type=int, default=24, help="Distance-transform feather size.")
-    parser.add_argument("--sim-sigma", type=float, default=45.0, help="Low-frequency similarity sigma; lower is stricter.")
-    parser.add_argument("--sim-blur-radius", type=int, default=15, help="Low-frequency comparison blur radius.")
-    parser.add_argument("--guided-mask-radius", type=int, default=8, help="Guided filtering radius for final mask.")
-    parser.add_argument("--print-stats", action="store_true", help="Print mask and output-delta statistics for tuning.")
+    parser.add_argument("--alpha", type=float, default=0.28, help="Simple source-detail transfer strength.")
+    parser.add_argument("--detail-sigma", type=float, default=1.6, help="Gaussian sigma for fine detail extraction.")
+    parser.add_argument("--max-detail", type=float, default=18.0, help="Clamp source detail magnitude in LAB-L units.")
+    parser.add_argument("--mask-erode", type=int, default=8, help="Shrink face mask inward before feathering.")
+    parser.add_argument("--mask-feather", type=int, default=36, help="Distance-transform feather size.")
     return parser
 
 
@@ -405,25 +348,14 @@ def main() -> None:
         source_face,
         target_face,
         alpha=args.alpha,
-        detail_radius=args.detail_radius,
+        detail_sigma=args.detail_sigma,
         max_detail=args.max_detail,
-        detail_gain=args.detail_gain,
-        mask_gamma=args.mask_gamma,
         mask_erode=args.mask_erode,
         mask_feather=args.mask_feather,
-        sim_sigma=args.sim_sigma,
-        sim_blur_radius=args.sim_blur_radius,
-        guided_mask_radius=args.guided_mask_radius,
     )
     write_image(args.out, enhanced)
     if args.mask_out:
         write_image(args.mask_out, (np.clip(mask, 0, 1) * 255).astype(np.uint8))
-    if args.print_stats:
-        delta = cv2.absdiff(enhanced, target).astype(np.float32)
-        print(f"mask mean: {float(mask.mean()):.4f}")
-        print(f"mask max: {float(mask.max()):.4f}")
-        print(f"changed pixels > 2: {float((delta.max(axis=2) > 2).mean()):.4f}")
-        print(f"mean abs RGB delta: {float(delta.mean()):.4f}")
 
 
 if __name__ == "__main__":
