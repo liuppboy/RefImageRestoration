@@ -36,6 +36,26 @@ def test_fuse_luminance_detail_applies_alpha_inside_mask():
     np.testing.assert_allclose(fused, np.full((16, 16), 105, dtype=np.float32))
 
 
+def test_fuse_luminance_detail_supports_detail_gain():
+    target = np.full((16, 16), 100, dtype=np.float32)
+    detail = np.full((16, 16), 10, dtype=np.float32)
+    mask = np.ones((16, 16), dtype=np.float32)
+
+    fused = fuse_luminance_detail(target, detail, mask, alpha=0.5, detail_gain=3.0, max_detail=40)
+
+    np.testing.assert_allclose(fused, np.full((16, 16), 115, dtype=np.float32))
+
+
+def test_fuse_luminance_detail_supports_mask_gamma():
+    target = np.full((16, 16), 100, dtype=np.float32)
+    detail = np.full((16, 16), 20, dtype=np.float32)
+    mask = np.full((16, 16), 0.25, dtype=np.float32)
+
+    fused = fuse_luminance_detail(target, detail, mask, alpha=1.0, mask_gamma=0.5)
+
+    np.testing.assert_allclose(fused, np.full((16, 16), 110, dtype=np.float32))
+
+
 def test_build_feather_mask_has_soft_interior_edge():
     binary = np.zeros((64, 64), dtype=np.uint8)
     binary[16:48, 16:48] = 255

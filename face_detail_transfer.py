@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -52,10 +51,13 @@ def fuse_luminance_detail(
     mask: np.ndarray,
     alpha: float,
     max_detail: float = 24.0,
+    detail_gain: float = 1.0,
+    mask_gamma: float = 1.0,
 ) -> np.ndarray:
     target = target_l.astype(np.float32)
-    clipped_detail = np.clip(detail.astype(np.float32), -max_detail, max_detail)
+    clipped_detail = np.clip(detail.astype(np.float32) * float(detail_gain), -max_detail, max_detail)
     soft_mask = np.clip(mask.astype(np.float32), 0.0, 1.0)
+    soft_mask = np.power(soft_mask, max(0.05, float(mask_gamma)))
     fused = target + float(alpha) * soft_mask * clipped_detail
     return np.clip(fused, 0, 255).astype(np.float32)
 
@@ -302,12 +304,14 @@ def enhance_face_detail(
     target_bgr: np.ndarray,
     source_face: FaceInfo,
     target_face: FaceInfo,
-    alpha: float = 0.25,
-    detail_radius: int = 3,
-    max_detail: float = 20.0,
-    mask_erode: int = 12,
-    mask_feather: int = 32,
-    sim_sigma: float = 22.0,
+    alpha: float = 0.75,
+    detail_radius: int = 4,
+    max_detail: float = 48.0,
+    detail_gain: float = 2.0,
+    mask_gamma: float = 0.6,
+    mask_erode: int = 6,
+    mask_feather: int = 24,
+    sim_sigma: float = 45.0,
     sim_blur_radius: int = 15,
     guided_mask_radius: int = 8,
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -338,7 +342,15 @@ def enhance_face_detail(
         final_mask = np.clip(final_mask, 0.0, 1.0)
 
     detail = extract_luminance_detail(warped_l, radius=detail_radius)
-    target_lab[:, :, 0] = fuse_luminance_detail(target_l, detail, final_mask, alpha=alpha, max_detail=max_detail)
+    target_lab[:, :, 0] = fuse_luminance_detail(
+        target_l,
+        detail,
+        final_mask,
+        alpha=alpha,
+        max_detail=max_detail,
+        detail_gain=detail_gain,
+        mask_gamma=mask_gamma,
+    )
 
     enhanced = cv2.cvtColor(np.clip(target_lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
     return enhanced, final_mask
@@ -359,14 +371,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model-name", default="buffalo_l", help="InsightFace model pack name.")
     parser.add_argument("--providers", default="CPUExecutionProvider", help="ONNX Runtime providers.")
     parser.add_argument("--det-size", type=int, default=640, help="InsightFace detection size.")
-    parser.add_argument("--alpha", type=float, default=0.25, help="Detail transfer strength.")
-    parser.add_argument("--detail-radius", type=int, default=3, help="High-frequency extraction blur radius.")
-    parser.add_argument("--max-detail", type=float, default=20.0, help="Clamp source detail magnitude in LAB-L units.")
-    parser.add_argument("--mask-erode", type=int, default=12, help="Shrink face mask inward before feathering.")
-    parser.add_argument("--mask-feather", type=int, default=32, help="Distance-transform feather size.")
-    parser.add_argument("--sim-sigma", type=float, default=22.0, help="Low-frequency similarity sigma; lower is stricter.")
+    parser.add_argument("--alpha", type=float, default=0.75, help="Detail transfer strength.")
+    parser.add_argument("--detail-radius", type=int, default=4, help="High-frequency extraction blur radius.")
+    parser.add_argument("--max-detail", type=float, default=48.0, help="Clamp source detail magnitude in LAB-L units.")
+    parser.add_argument("--detail-gain", type=float, default=2.0, help="Amplify source high-frequency detail before clamping.")
+    parser.add_argument("--mask-gamma", type=float, default=0.6, help="Gamma applied to the soft mask; values below 1 make weak mask areas stronger.")
+    parser.add_argument("--mask-erode", type=int, default=6, help="Shrink face mask inward before feathering.")
+    parser.add_argument("--mask-feather", type=int, default=24, help="Distance-transform feather size.")
+    parser.add_argument("--sim-sigma", type=float, default=45.0, help="Low-frequency similarity sigma; lower is stricter.")
     parser.add_argument("--sim-blur-radius", type=int, default=15, help="Low-frequency comparison blur radius.")
     parser.add_argument("--guided-mask-radius", type=int, default=8, help="Guided filtering radius for final mask.")
+    parser.add_argument("--print-stats", action="store_true", help="Print mask and output-delta statistics for tuning.")
     return parser
 
 
@@ -392,6 +407,8 @@ def main() -> None:
         alpha=args.alpha,
         detail_radius=args.detail_radius,
         max_detail=args.max_detail,
+        detail_gain=args.detail_gain,
+        mask_gamma=args.mask_gamma,
         mask_erode=args.mask_erode,
         mask_feather=args.mask_feather,
         sim_sigma=args.sim_sigma,
@@ -401,6 +418,12 @@ def main() -> None:
     write_image(args.out, enhanced)
     if args.mask_out:
         write_image(args.mask_out, (np.clip(mask, 0, 1) * 255).astype(np.uint8))
+    if args.print_stats:
+        delta = cv2.absdiff(enhanced, target).astype(np.float32)
+        print(f"mask mean: {float(mask.mean()):.4f}")
+        print(f"mask max: {float(mask.max()):.4f}")
+        print(f"changed pixels > 2: {float((delta.max(axis=2) > 2).mean()):.4f}")
+        print(f"mean abs RGB delta: {float(delta.mean()):.4f}")
 
 
 if __name__ == "__main__":
