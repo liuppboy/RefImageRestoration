@@ -30,6 +30,8 @@ python face_detail_transfer.py `
   --mid-sigma 3.5 `
   --fine-max-detail 18 `
   --mid-max-detail 18 `
+  --sigma-scale-power 0.5 `
+  --max-sigma-scale 2.0 `
   --mask-region-scale 0.85 `
   --mask-erode 8 `
   --mask-feather 36
@@ -53,6 +55,9 @@ The default ONNX Runtime provider is CPU. If you install a compatible GPU build,
 - `--mid-sigma`: mid-frequency extraction sigma.
 - `--fine-max-detail`: clamps fine detail magnitude to reduce speckle and halos.
 - `--mid-max-detail`: clamps mid detail magnitude to reduce ghosting.
+- `--sigma-scale-power`: automatically increases detail extraction sigma when the enhanced 512 crop is pasted back into a smaller face.
+- `--max-sigma-scale`: caps automatic small-face sigma scaling. Increase slightly only when small-face results are still too subtle.
+- `--no-scale-aware-sigma`: disables automatic small-face sigma scaling.
 - `--mask-region-scale`: expands the transfer mask with a small bbox-based face ellipse. Use `0` for landmark hull only.
 - `--mask-erode`: shrinks the target face mask inward before fusion.
 - `--mask-feather`: Gaussian soft-edge width. Larger means softer boundaries.
@@ -87,6 +92,14 @@ If the face is extremely small in the final target image, the visible result is 
 the 512 crop improves detection and transfer stability, but it cannot display pore-level detail inside a 30-pixel face.
 For small faces, judge the effect by zooming in or writing `--mask-out`; at native size the change is intentionally subtle
 to avoid sharpening halos and texture artifacts.
+If the mask looks correct but the result is still too subtle on small faces, keep alpha unchanged first and try:
+
+```powershell
+--max-sigma-scale 2.5
+```
+
+This transfers source details at a frequency that survives the final downsample. Raising alpha first is more likely to
+create halos and sharpened artifacts.
 
 ## Evaluation
 

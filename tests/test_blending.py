@@ -13,6 +13,7 @@ from face_detail_transfer import (
     fuse_multiband_luminance_detail,
     fuse_luminance_detail,
     paste_face_crop,
+    scale_detail_sigmas_for_paste_size,
 )
 
 
@@ -189,3 +190,31 @@ def test_detect_largest_face_with_fallback_tries_next_detector():
     detected = detect_largest_face_with_fallback([FakeApp([]), FakeApp([face])], image)
 
     np.testing.assert_allclose(detected.bbox, face.bbox)
+
+
+def test_scale_detail_sigmas_keeps_large_paste_size_unchanged():
+    fine, mid, scale = scale_detail_sigmas_for_paste_size(
+        fine_sigma=1.0,
+        mid_sigma=3.5,
+        work_size=512,
+        target_box=(0, 0, 768, 768),
+    )
+
+    assert fine == 1.0
+    assert mid == 3.5
+    assert scale == 1.0
+
+
+def test_scale_detail_sigmas_increases_for_small_paste_size():
+    fine, mid, scale = scale_detail_sigmas_for_paste_size(
+        fine_sigma=1.0,
+        mid_sigma=3.5,
+        work_size=512,
+        target_box=(0, 0, 128, 128),
+        power=0.5,
+        max_scale=2.0,
+    )
+
+    assert scale == 2.0
+    assert fine == 2.0
+    assert mid == 7.0

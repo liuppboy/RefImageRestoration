@@ -256,6 +256,27 @@ def paste_mask(
     return np.clip(full_mask, 0.0, 1.0)
 
 
+def scale_detail_sigmas_for_paste_size(
+    fine_sigma: float,
+    mid_sigma: float,
+    work_size: int,
+    target_box: tuple[int, int, int, int],
+    power: float = 0.5,
+    max_scale: float = 2.0,
+) -> tuple[float, float, float]:
+    x1, y1, x2, y2 = target_box
+    paste_side = max(x2 - x1, y2 - y1)
+    if paste_side <= 0:
+        return fine_sigma, mid_sigma, 1.0
+
+    downsample = float(work_size) / float(paste_side)
+    if downsample <= 1.0:
+        return fine_sigma, mid_sigma, 1.0
+
+    scale = min(float(max_scale), max(1.0, downsample ** float(power)))
+    return fine_sigma * scale, mid_sigma * scale, scale
+
+
 def expanded_bbox_points(bbox: np.ndarray, image_shape: tuple[int, int], scale: float) -> np.ndarray:
     h, w = image_shape[:2]
     x1, y1, x2, y2 = bbox.astype(np.float32)
@@ -485,6 +506,9 @@ def enhance_image_face_detail(
     mask_erode: int = 8,
     mask_feather: int = 36,
     mask_region_scale: float = 0.85,
+    scale_aware_sigma: bool = True,
+    sigma_scale_power: float = 0.5,
+    max_sigma_scale: float = 2.0,
 ) -> tuple[np.ndarray, np.ndarray]:
     crop_app = crop_app or app
     full_detectors = [app] if crop_app is app else [app, crop_app]
@@ -496,6 +520,18 @@ def enhance_image_face_detail(
 
     source_crop_face = detect_largest_face(crop_app, source_crop)
     target_crop_face = detect_largest_face(crop_app, target_crop)
+    effective_fine_sigma = fine_sigma
+    effective_mid_sigma = mid_sigma
+    if scale_aware_sigma:
+        effective_fine_sigma, effective_mid_sigma, _ = scale_detail_sigmas_for_paste_size(
+            fine_sigma,
+            mid_sigma,
+            work_size,
+            target_box,
+            power=sigma_scale_power,
+            max_scale=max_sigma_scale,
+        )
+
     enhanced_crop, crop_mask = enhance_face_detail(
         source_crop,
         target_crop,
@@ -503,8 +539,8 @@ def enhance_image_face_detail(
         target_crop_face,
         fine_alpha=fine_alpha,
         mid_alpha=mid_alpha,
-        fine_sigma=fine_sigma,
-        mid_sigma=mid_sigma,
+        fine_sigma=effective_fine_sigma,
+        mid_sigma=effective_mid_sigma,
         fine_max_detail=fine_max_detail,
         mid_max_detail=mid_max_detail,
         mask_erode=mask_erode,
@@ -540,6 +576,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mid-sigma", type=float, default=3.5, help="Mid-frequency Gaussian sigma.")
     parser.add_argument("--fine-max-detail", type=float, default=18.0, help="Clamp fine detail magnitude in LAB-L units.")
     parser.add_argument("--mid-max-detail", type=float, default=18.0, help="Clamp mid detail magnitude in LAB-L units.")
+    parser.add_argument("--no-scale-aware-sigma", action="store_true", help="Disable automatic sigma scaling for small pasted faces.")
+    parser.add_argument("--sigma-scale-power", type=float, default=0.5, help="Small-face sigma scaling exponent.")
+    parser.add_argument("--max-sigma-scale", type=float, default=2.0, help="Maximum automatic sigma scale for small faces.")
     parser.add_argument("--mask-erode", type=int, default=8, help="Shrink face mask inward before feathering.")
     parser.add_argument("--mask-feather", type=int, default=36, help="Gaussian soft-edge feather size.")
     parser.add_argument("--mask-region-scale", type=float, default=0.85, help="Optional bbox-ellipse face mask expansion. Use 0 for landmark hull only.")
@@ -570,6 +609,9 @@ def main() -> None:
         mask_erode=args.mask_erode,
         mask_feather=args.mask_feather,
         mask_region_scale=args.mask_region_scale,
+        scale_aware_sigma=not args.no_scale_aware_sigma,
+        sigma_scale_power=args.sigma_scale_power,
+        max_sigma_scale=args.max_sigma_scale,
     )
     write_image(args.out, enhanced)
     if args.mask_out:

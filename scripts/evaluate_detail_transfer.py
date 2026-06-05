@@ -158,6 +158,9 @@ def main() -> None:
     parser.add_argument("--mid-sigma", type=float, default=3.5)
     parser.add_argument("--fine-max-detail", type=float, default=18.0)
     parser.add_argument("--mid-max-detail", type=float, default=18.0)
+    parser.add_argument("--no-scale-aware-sigma", action="store_true")
+    parser.add_argument("--sigma-scale-power", type=float, default=0.5)
+    parser.add_argument("--max-sigma-scale", type=float, default=2.0)
     parser.add_argument("--mask-erode", type=int, default=8)
     parser.add_argument("--mask-feather", type=int, default=36)
     parser.add_argument("--mask-region-scale", type=float, default=0.85)
@@ -200,6 +203,9 @@ def main() -> None:
             mask_erode=args.mask_erode,
             mask_feather=args.mask_feather,
             mask_region_scale=args.mask_region_scale,
+            scale_aware_sigma=not args.no_scale_aware_sigma,
+            sigma_scale_power=args.sigma_scale_power,
+            max_sigma_scale=args.max_sigma_scale,
         )
         metrics = evaluate_pair(gt, target, enhanced, mask)
         stem = path.stem
