@@ -136,6 +136,30 @@ def test_fuse_multiband_luminance_detail_replace_mode_matches_source_bands():
     np.testing.assert_allclose(fused, np.full((8, 8), 114, dtype=np.float32))
 
 
+def test_fuse_multiband_luminance_detail_applies_surface_band():
+    target = np.full((8, 8), 100, dtype=np.float32)
+    fine = np.zeros((8, 8), dtype=np.float32)
+    mid = np.zeros((8, 8), dtype=np.float32)
+    surface = np.full((8, 8), 20, dtype=np.float32)
+    mask = np.ones((8, 8), dtype=np.float32)
+
+    fused = fuse_multiband_luminance_detail(
+        target,
+        fine,
+        mid,
+        mask,
+        fine_alpha=0.0,
+        mid_alpha=0.0,
+        fine_max_detail=18,
+        mid_max_detail=18,
+        surface_detail=surface,
+        surface_alpha=0.25,
+        surface_max_detail=8,
+    )
+
+    np.testing.assert_allclose(fused, np.full((8, 8), 102, dtype=np.float32))
+
+
 def test_build_feather_mask_has_soft_interior_edge():
     binary = np.zeros((64, 64), dtype=np.uint8)
     binary[16:48, 16:48] = 255

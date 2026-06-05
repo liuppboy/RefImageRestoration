@@ -99,14 +99,21 @@ def fuse_multiband_luminance_detail(
     mid_alpha: float,
     fine_max_detail: float,
     mid_max_detail: float,
+    surface_detail: np.ndarray | None = None,
+    surface_alpha: float = 0.0,
+    surface_max_detail: float = 10.0,
     target_fine_detail: np.ndarray | None = None,
     target_mid_detail: np.ndarray | None = None,
+    target_surface_detail: np.ndarray | None = None,
     mode: str = "add",
 ) -> np.ndarray:
     target = target_l.astype(np.float32)
     soft_mask = np.clip(mask.astype(np.float32), 0.0, 1.0)
     fine = np.clip(fine_detail.astype(np.float32), -fine_max_detail, fine_max_detail)
     mid = np.clip(mid_detail.astype(np.float32), -mid_max_detail, mid_max_detail)
+    surface = None
+    if surface_detail is not None and surface_alpha != 0:
+        surface = np.clip(surface_detail.astype(np.float32), -surface_max_detail, surface_max_detail)
     if mode == "replace":
         if target_fine_detail is None or target_mid_detail is None:
             raise ValueError("replace mode requires target fine and mid detail bands")
@@ -114,10 +121,18 @@ def fuse_multiband_luminance_detail(
         target_mid = np.clip(target_mid_detail.astype(np.float32), -mid_max_detail, mid_max_detail)
         fine = fine - target_fine
         mid = mid - target_mid
+        if surface is not None:
+            if target_surface_detail is None:
+                raise ValueError("replace mode with surface detail requires target surface detail band")
+            target_surface = np.clip(target_surface_detail.astype(np.float32), -surface_max_detail, surface_max_detail)
+            surface = surface - target_surface
     elif mode != "add":
         raise ValueError(f"Unsupported detail mode: {mode}")
 
-    fused = target + soft_mask * (float(fine_alpha) * fine + float(mid_alpha) * mid)
+    transfer = float(fine_alpha) * fine + float(mid_alpha) * mid
+    if surface is not None:
+        transfer += float(surface_alpha) * surface
+    fused = target + soft_mask * transfer
     return np.clip(fused, 0, 255).astype(np.float32)
 
 
@@ -515,10 +530,13 @@ def enhance_face_detail(
     target_face: FaceInfo,
     fine_alpha: float = 0.65,
     mid_alpha: float = 0.30,
+    surface_alpha: float = 0.08,
     fine_sigma: float = 1.0,
     mid_sigma: float = 3.5,
+    surface_sigma: float = 9.0,
     fine_max_detail: float = 18.0,
     mid_max_detail: float = 18.0,
+    surface_max_detail: float = 10.0,
     mask_erode: int = 8,
     mask_feather: int = 36,
     mask_region_scale: float = 0.85,
@@ -549,14 +567,25 @@ def enhance_face_detail(
         fine_sigma=fine_sigma,
         mid_sigma=mid_sigma,
     )
+    surface_detail = None
+    if surface_alpha != 0:
+        surface_base = gaussian_base(warped_l, surface_sigma)
+        mid_base = gaussian_base(warped_l, mid_sigma)
+        surface_detail = (mid_base - surface_base).astype(np.float32)
+
     target_fine_detail = None
     target_mid_detail = None
+    target_surface_detail = None
     if detail_mode == "replace":
         target_fine_detail, target_mid_detail = extract_multiband_details(
             target_l,
             fine_sigma=fine_sigma,
             mid_sigma=mid_sigma,
         )
+        if surface_detail is not None:
+            target_surface_base = gaussian_base(target_l, surface_sigma)
+            target_mid_base = gaussian_base(target_l, mid_sigma)
+            target_surface_detail = (target_mid_base - target_surface_base).astype(np.float32)
 
     target_lab[:, :, 0] = fuse_multiband_luminance_detail(
         target_l,
@@ -567,8 +596,12 @@ def enhance_face_detail(
         mid_alpha=mid_alpha,
         fine_max_detail=fine_max_detail,
         mid_max_detail=mid_max_detail,
+        surface_detail=surface_detail,
+        surface_alpha=surface_alpha,
+        surface_max_detail=surface_max_detail,
         target_fine_detail=target_fine_detail,
         target_mid_detail=target_mid_detail,
+        target_surface_detail=target_surface_detail,
         mode=detail_mode,
     )
 
@@ -585,10 +618,13 @@ def enhance_image_face_detail(
     crop_scale: float = 2.4,
     fine_alpha: float = 0.65,
     mid_alpha: float = 0.30,
+    surface_alpha: float = 0.08,
     fine_sigma: float = 1.0,
     mid_sigma: float = 3.5,
+    surface_sigma: float = 9.0,
     fine_max_detail: float = 18.0,
     mid_max_detail: float = 18.0,
+    surface_max_detail: float = 10.0,
     mask_erode: int = 8,
     mask_feather: int = 36,
     mask_region_scale: float = 0.85,
@@ -618,8 +654,9 @@ def enhance_image_face_detail(
         return passthrough_target(target_bgr, debug_dir=debug_dir, reason=str(exc))
     effective_fine_sigma = fine_sigma
     effective_mid_sigma = mid_sigma
+    effective_surface_sigma = surface_sigma
     if scale_aware_sigma:
-        effective_fine_sigma, effective_mid_sigma, _ = scale_detail_sigmas_for_paste_size(
+        effective_fine_sigma, effective_mid_sigma, sigma_scale = scale_detail_sigmas_for_paste_size(
             fine_sigma,
             mid_sigma,
             work_size,
@@ -627,6 +664,7 @@ def enhance_image_face_detail(
             power=sigma_scale_power,
             max_scale=max_sigma_scale,
         )
+        effective_surface_sigma = surface_sigma * sigma_scale
 
     def run_crop_enhance(alpha_scale: float) -> tuple[np.ndarray, np.ndarray]:
         return enhance_face_detail(
@@ -636,10 +674,13 @@ def enhance_image_face_detail(
             target_crop_face,
             fine_alpha=fine_alpha * alpha_scale,
             mid_alpha=mid_alpha * alpha_scale,
+            surface_alpha=surface_alpha * alpha_scale,
             fine_sigma=effective_fine_sigma,
             mid_sigma=effective_mid_sigma,
+            surface_sigma=effective_surface_sigma,
             fine_max_detail=fine_max_detail,
             mid_max_detail=mid_max_detail,
+            surface_max_detail=surface_max_detail,
             mask_erode=mask_erode,
             mask_feather=mask_feather,
             mask_region_scale=mask_region_scale,
@@ -677,6 +718,7 @@ def enhance_image_face_detail(
             f"target_box: {target_box}",
             f"effective_fine_sigma: {effective_fine_sigma:.4f}",
             f"effective_mid_sigma: {effective_mid_sigma:.4f}",
+            f"effective_surface_sigma: {effective_surface_sigma:.4f}",
             f"initial_crop_mean_abs_diff_in_mask: {initial_crop_mean_diff:.4f}",
             f"auto_detail_gain: {auto_detail_gain:.4f}",
             f"crop_mask_pixels_gt_0.15: {int(crop_active.sum())}",
@@ -796,11 +838,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--crop-scale", type=float, default=2.4, help="Square crop scale relative to detected face bbox.")
     parser.add_argument("--fine-alpha", type=float, default=0.65, help="Fine texture transfer strength.")
     parser.add_argument("--mid-alpha", type=float, default=0.30, help="Mid-frequency structure transfer strength.")
+    parser.add_argument("--surface-alpha", type=float, default=0.08, help="Broad skin surface texture transfer strength.")
     parser.add_argument("--detail-mode", choices=["add", "replace"], default="add", help="Add source detail on top, or replace target detail bands with source detail.")
     parser.add_argument("--fine-sigma", type=float, default=1.0, help="Fine detail Gaussian sigma.")
     parser.add_argument("--mid-sigma", type=float, default=3.5, help="Mid-frequency Gaussian sigma.")
+    parser.add_argument("--surface-sigma", type=float, default=9.0, help="Broad skin surface Gaussian sigma.")
     parser.add_argument("--fine-max-detail", type=float, default=18.0, help="Clamp fine detail magnitude in LAB-L units.")
     parser.add_argument("--mid-max-detail", type=float, default=18.0, help="Clamp mid detail magnitude in LAB-L units.")
+    parser.add_argument("--surface-max-detail", type=float, default=10.0, help="Clamp broad skin surface detail magnitude in LAB-L units.")
     parser.add_argument("--no-scale-aware-sigma", action="store_true", help="Disable automatic sigma scaling for small pasted faces.")
     parser.add_argument("--sigma-scale-power", type=float, default=0.5, help="Small-face sigma scaling exponent.")
     parser.add_argument("--max-sigma-scale", type=float, default=2.0, help="Maximum automatic sigma scale for small faces.")
@@ -833,10 +878,13 @@ def enhance_one_from_paths(
         crop_scale=args.crop_scale,
         fine_alpha=args.fine_alpha,
         mid_alpha=args.mid_alpha,
+        surface_alpha=args.surface_alpha,
         fine_sigma=args.fine_sigma,
         mid_sigma=args.mid_sigma,
+        surface_sigma=args.surface_sigma,
         fine_max_detail=args.fine_max_detail,
         mid_max_detail=args.mid_max_detail,
+        surface_max_detail=args.surface_max_detail,
         mask_erode=args.mask_erode,
         mask_feather=args.mask_feather,
         mask_region_scale=args.mask_region_scale,

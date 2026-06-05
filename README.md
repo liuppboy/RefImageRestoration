@@ -27,11 +27,14 @@ python face_detail_transfer.py `
   --crop-scale 2.4 `
   --fine-alpha 0.65 `
   --mid-alpha 0.30 `
+  --surface-alpha 0.08 `
   --detail-mode add `
   --fine-sigma 1.0 `
   --mid-sigma 3.5 `
+  --surface-sigma 9.0 `
   --fine-max-detail 18 `
   --mid-max-detail 18 `
+  --surface-max-detail 10 `
   --sigma-scale-power 0.5 `
   --max-sigma-scale 2.0 `
   --min-crop-mean-diff 2.5 `
@@ -116,11 +119,14 @@ Legacy JSON files with both source and target paths are still supported by using
 - `--crop-scale`: square crop size relative to the detected face box before resizing to `--work-size`.
 - `--fine-alpha`: fine texture transfer strength.
 - `--mid-alpha`: mid-frequency structure transfer strength for eyes, lips, nose, and inner facial contours.
+- `--surface-alpha`: broad skin surface texture transfer strength. Helps reduce waxy or oily-looking smoothness.
 - `--detail-mode`: `add` transfers source detail on top of the target. `replace` moves target detail bands toward source detail bands.
 - `--fine-sigma`: fine detail extraction sigma.
 - `--mid-sigma`: mid-frequency extraction sigma.
+- `--surface-sigma`: broad skin surface extraction sigma.
 - `--fine-max-detail`: clamps fine detail magnitude to reduce speckle and halos.
 - `--mid-max-detail`: clamps mid detail magnitude to reduce ghosting.
+- `--surface-max-detail`: clamps broad skin surface detail magnitude to avoid changing lighting too much.
 - `--sigma-scale-power`: automatically increases detail extraction sigma when the enhanced 512 crop is pasted back into a smaller face.
 - `--max-sigma-scale`: caps automatic small-face sigma scaling. Increase slightly only when small-face results are still too subtle.
 - `--no-scale-aware-sigma`: disables automatic small-face sigma scaling.
@@ -169,6 +175,10 @@ If the mask looks correct but the result is still too subtle, keep alpha unchang
 
 This tells the tool to make the 512 working crop measurably different before pasting it back. If the face is small,
 `--max-sigma-scale 2.5` can also help transfer details at a frequency that survives the final downsample.
+
+If sharpness improves but the face still looks waxy or oily, try `--surface-alpha 0.16` or `--surface-alpha 0.22` before increasing
+`--fine-alpha`. The surface band transfers broader source skin texture and is less likely to create hard sharpening
+artifacts.
 
 When the mask looks right but the output appears unchanged, run with `--debug-dir debug_run` and inspect:
 

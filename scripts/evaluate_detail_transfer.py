@@ -154,11 +154,14 @@ def main() -> None:
     parser.add_argument("--out-dir", default="tests/eval_outputs", help="Output directory for generated cases.")
     parser.add_argument("--fine-alpha", type=float, default=0.65)
     parser.add_argument("--mid-alpha", type=float, default=0.30)
+    parser.add_argument("--surface-alpha", type=float, default=0.08)
     parser.add_argument("--detail-mode", choices=["add", "replace"], default="add")
     parser.add_argument("--fine-sigma", type=float, default=1.0)
     parser.add_argument("--mid-sigma", type=float, default=3.5)
+    parser.add_argument("--surface-sigma", type=float, default=9.0)
     parser.add_argument("--fine-max-detail", type=float, default=18.0)
     parser.add_argument("--mid-max-detail", type=float, default=18.0)
+    parser.add_argument("--surface-max-detail", type=float, default=10.0)
     parser.add_argument("--no-scale-aware-sigma", action="store_true")
     parser.add_argument("--sigma-scale-power", type=float, default=0.5)
     parser.add_argument("--max-sigma-scale", type=float, default=2.0)
@@ -199,11 +202,14 @@ def main() -> None:
             crop_scale=args.crop_scale,
             fine_alpha=args.fine_alpha,
             mid_alpha=args.mid_alpha,
+            surface_alpha=args.surface_alpha,
             detail_mode=args.detail_mode,
             fine_sigma=args.fine_sigma,
             mid_sigma=args.mid_sigma,
+            surface_sigma=args.surface_sigma,
             fine_max_detail=args.fine_max_detail,
             mid_max_detail=args.mid_max_detail,
+            surface_max_detail=args.surface_max_detail,
             mask_erode=args.mask_erode,
             mask_feather=args.mask_feather,
             mask_region_scale=args.mask_region_scale,
