@@ -66,3 +66,25 @@ python face_detail_transfer.py `
 5. Adds the source detail into the target LAB luminance channel through the soft face mask.
 
 The target color, lighting, and low-frequency shape are preserved. Only matched face detail is transferred.
+
+## Evaluation
+
+The repository includes a reproducible evaluation helper:
+
+```powershell
+python scripts/evaluate_detail_transfer.py
+```
+
+If `tests/samples/` is empty, the script downloads default public NASA portrait samples first. It then creates a
+ground-truth target from each source image, degrades it into a blurred target, runs the transfer, and writes metrics
+to `tests/eval_outputs/metrics.csv`.
+
+For the local NASA portrait samples used during development, the default settings improved all three checks:
+
+| Sample | MAE L | SSIM L | Detail corr |
+| --- | ---: | ---: | ---: |
+| Eileen Collins portrait | 3.650 -> 2.976 | 0.9126 -> 0.9334 | 0.7630 -> 0.8402 |
+| Mae Jemison portrait | 1.818 -> 1.468 | 0.9661 -> 0.9724 | 0.8076 -> 0.8645 |
+| Sally Ride portrait | 2.657 -> 2.177 | 0.9460 -> 0.9583 | 0.7827 -> 0.8499 |
+
+The downloaded samples and generated outputs are ignored by git.
