@@ -161,6 +161,81 @@ def detect_largest_face(app: object, image: np.ndarray) -> FaceInfo:
     return face_to_info(face)
 
 
+def detect_largest_face_with_fallback(apps: Iterable[object], image: np.ndarray) -> FaceInfo:
+    last_error: RuntimeError | None = None
+    for app in apps:
+        try:
+            return detect_largest_face(app, image)
+        except RuntimeError as exc:
+            last_error = exc
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("No face detector was provided.")
+
+
+def crop_face_square(
+    image: np.ndarray,
+    bbox: np.ndarray,
+    work_size: int = 512,
+    scale: float = 2.4,
+) -> tuple[np.ndarray, tuple[int, int, int, int]]:
+    h, w = image.shape[:2]
+    x1, y1, x2, y2 = bbox.astype(np.float32)
+    cx = float((x1 + x2) * 0.5)
+    cy = float((y1 + y2) * 0.5)
+    face_side = max(float(x2 - x1), float(y2 - y1))
+    side = int(round(max(8.0, face_side * float(scale))))
+    side = min(side, w, h)
+
+    left = int(round(cx - side * 0.5))
+    top = int(round(cy - side * 0.5))
+    left = max(0, min(left, w - side))
+    top = max(0, min(top, h - side))
+    right = left + side
+    bottom = top + side
+
+    crop = image[top:bottom, left:right]
+    crop = cv2.resize(crop, (work_size, work_size), interpolation=cv2.INTER_CUBIC)
+    return crop, (left, top, right, bottom)
+
+
+def paste_face_crop(
+    target: np.ndarray,
+    enhanced_crop: np.ndarray,
+    mask: np.ndarray,
+    box: tuple[int, int, int, int],
+) -> np.ndarray:
+    x1, y1, x2, y2 = box
+    width = x2 - x1
+    height = y2 - y1
+    if width <= 0 or height <= 0:
+        return target.copy()
+
+    resized_crop = cv2.resize(enhanced_crop, (width, height), interpolation=cv2.INTER_CUBIC).astype(np.float32)
+    resized_mask = cv2.resize(mask.astype(np.float32), (width, height), interpolation=cv2.INTER_LINEAR)
+    resized_mask = np.clip(resized_mask, 0.0, 1.0)[:, :, None]
+
+    output = target.copy().astype(np.float32)
+    roi = output[y1:y2, x1:x2]
+    roi[:] = roi * (1.0 - resized_mask) + resized_crop * resized_mask
+    return np.clip(output, 0, 255).astype(np.uint8)
+
+
+def paste_mask(
+    shape: tuple[int, int],
+    mask: np.ndarray,
+    box: tuple[int, int, int, int],
+) -> np.ndarray:
+    x1, y1, x2, y2 = box
+    width = x2 - x1
+    height = y2 - y1
+    full_mask = np.zeros(shape, dtype=np.float32)
+    if width <= 0 or height <= 0:
+        return full_mask
+    full_mask[y1:y2, x1:x2] = cv2.resize(mask.astype(np.float32), (width, height), interpolation=cv2.INTER_LINEAR)
+    return np.clip(full_mask, 0.0, 1.0)
+
+
 def expanded_bbox_points(bbox: np.ndarray, image_shape: tuple[int, int], scale: float) -> np.ndarray:
     h, w = image_shape[:2]
     x1, y1, x2, y2 = bbox.astype(np.float32)
@@ -353,6 +428,51 @@ def enhance_face_detail(
     return enhanced, final_mask
 
 
+def enhance_image_face_detail(
+    app: object,
+    source_bgr: np.ndarray,
+    target_bgr: np.ndarray,
+    crop_app: object | None = None,
+    work_size: int = 512,
+    crop_scale: float = 2.4,
+    fine_alpha: float = 0.65,
+    mid_alpha: float = 0.30,
+    fine_sigma: float = 1.0,
+    mid_sigma: float = 3.5,
+    fine_max_detail: float = 18.0,
+    mid_max_detail: float = 18.0,
+    mask_erode: int = 8,
+    mask_feather: int = 36,
+) -> tuple[np.ndarray, np.ndarray]:
+    crop_app = crop_app or app
+    full_detectors = [app] if crop_app is app else [app, crop_app]
+    source_full_face = detect_largest_face_with_fallback(full_detectors, source_bgr)
+    target_full_face = detect_largest_face_with_fallback(full_detectors, target_bgr)
+
+    source_crop, _ = crop_face_square(source_bgr, source_full_face.bbox, work_size=work_size, scale=crop_scale)
+    target_crop, target_box = crop_face_square(target_bgr, target_full_face.bbox, work_size=work_size, scale=crop_scale)
+
+    source_crop_face = detect_largest_face(crop_app, source_crop)
+    target_crop_face = detect_largest_face(crop_app, target_crop)
+    enhanced_crop, crop_mask = enhance_face_detail(
+        source_crop,
+        target_crop,
+        source_crop_face,
+        target_crop_face,
+        fine_alpha=fine_alpha,
+        mid_alpha=mid_alpha,
+        fine_sigma=fine_sigma,
+        mid_sigma=mid_sigma,
+        fine_max_detail=fine_max_detail,
+        mid_max_detail=mid_max_detail,
+        mask_erode=mask_erode,
+        mask_feather=mask_feather,
+    )
+    enhanced = paste_face_crop(target_bgr, enhanced_crop, crop_mask, target_box)
+    full_mask = paste_mask(target_bgr.shape[:2], crop_mask, target_box)
+    return enhanced, full_mask
+
+
 def parse_providers(value: str) -> list[str]:
     providers = [part.strip() for part in value.split(",") if part.strip()]
     return providers or ["CPUExecutionProvider"]
@@ -367,7 +487,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--models-dir", default="models/insightface", help="InsightFace model root.")
     parser.add_argument("--model-name", default="buffalo_l", help="InsightFace model pack name.")
     parser.add_argument("--providers", default="CPUExecutionProvider", help="ONNX Runtime providers.")
-    parser.add_argument("--det-size", type=int, default=640, help="InsightFace detection size.")
+    parser.add_argument("--det-size", type=int, default=1024, help="InsightFace detection size.")
+    parser.add_argument("--crop-det-size", type=int, default=512, help="InsightFace detection size for fixed face crops.")
+    parser.add_argument("--work-size", type=int, default=512, help="Fixed face crop size used for detail transfer.")
+    parser.add_argument("--crop-scale", type=float, default=2.4, help="Square crop scale relative to detected face bbox.")
     parser.add_argument("--fine-alpha", type=float, default=0.65, help="Fine texture transfer strength.")
     parser.add_argument("--mid-alpha", type=float, default=0.30, help="Mid-frequency structure transfer strength.")
     parser.add_argument("--fine-sigma", type=float, default=1.0, help="Fine detail Gaussian sigma.")
@@ -383,21 +506,17 @@ def main() -> None:
     args = build_arg_parser().parse_args()
     source = read_image(args.source)
     target = read_image(args.target)
-    if source.shape[:2] != target.shape[:2]:
-        source_for_detection = cv2.resize(source, (target.shape[1], target.shape[0]), interpolation=cv2.INTER_CUBIC)
-    else:
-        source_for_detection = source
 
     providers = parse_providers(args.providers)
     app = load_insightface(args.model_name, args.models_dir, args.det_size, providers)
-    source_face = detect_largest_face(app, source_for_detection)
-    target_face = detect_largest_face(app, target)
-
-    enhanced, mask = enhance_face_detail(
-        source_for_detection,
+    crop_app = load_insightface(args.model_name, args.models_dir, args.crop_det_size, providers)
+    enhanced, mask = enhance_image_face_detail(
+        app,
+        source,
         target,
-        source_face,
-        target_face,
+        crop_app=crop_app,
+        work_size=args.work_size,
+        crop_scale=args.crop_scale,
         fine_alpha=args.fine_alpha,
         mid_alpha=args.mid_alpha,
         fine_sigma=args.fine_sigma,

@@ -15,9 +15,8 @@ from skimage.metrics import structural_similarity
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from face_detail_transfer import (
-    build_face_hull_mask,
     detect_largest_face,
-    enhance_face_detail,
+    enhance_image_face_detail,
     extract_luminance_detail,
     load_insightface,
     read_image,
@@ -161,6 +160,10 @@ def main() -> None:
     parser.add_argument("--mid-max-detail", type=float, default=18.0)
     parser.add_argument("--mask-erode", type=int, default=8)
     parser.add_argument("--mask-feather", type=int, default=36)
+    parser.add_argument("--det-size", type=int, default=1024)
+    parser.add_argument("--crop-det-size", type=int, default=512)
+    parser.add_argument("--work-size", type=int, default=512)
+    parser.add_argument("--crop-scale", type=float, default=2.4)
     parser.add_argument("--no-download", action="store_true", help="Do not download default NASA samples.")
     args = parser.parse_args()
 
@@ -170,22 +173,23 @@ def main() -> None:
     if not args.no_download and not list(samples_dir.glob("*.jpg")):
         download_default_samples(samples_dir)
 
-    app = load_insightface("buffalo_l", "models/insightface", 640, ["CPUExecutionProvider"])
+    app = load_insightface("buffalo_l", "models/insightface", args.det_size, ["CPUExecutionProvider"])
+    crop_app = load_insightface("buffalo_l", "models/insightface", args.crop_det_size, ["CPUExecutionProvider"])
 
     rows = []
     for path in sorted(samples_dir.glob("*.jpg")):
         image = read_image(path)
         full_face = detect_largest_face(app, image)
         source = center_face_crop(image, full_face.bbox)
-        source_face = detect_largest_face(app, source)
         gt = make_target_gt(source)
         target = degrade_target(gt)
-        target_face = detect_largest_face(app, target)
-        enhanced, mask = enhance_face_detail(
+        enhanced, mask = enhance_image_face_detail(
+            app,
             source,
             target,
-            source_face,
-            target_face,
+            crop_app=crop_app,
+            work_size=args.work_size,
+            crop_scale=args.crop_scale,
             fine_alpha=args.fine_alpha,
             mid_alpha=args.mid_alpha,
             fine_sigma=args.fine_sigma,

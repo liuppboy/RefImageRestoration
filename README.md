@@ -20,6 +20,10 @@ python face_detail_transfer.py `
   --target target.png `
   --out enhanced.png `
   --mask-out mask.png `
+  --det-size 1024 `
+  --crop-det-size 512 `
+  --work-size 512 `
+  --crop-scale 2.4 `
   --fine-alpha 0.65 `
   --mid-alpha 0.30 `
   --fine-sigma 1.0 `
@@ -38,6 +42,10 @@ The default ONNX Runtime provider is CPU. If you install a compatible GPU build,
 
 ## Important Parameters
 
+- `--det-size`: InsightFace detection resolution. The default is `1024`, which is more reliable for small faces.
+- `--crop-det-size`: InsightFace detection resolution inside the fixed face crop. The default is `512`, which is more stable for close face crops.
+- `--work-size`: fixed square face crop size used for transfer. The default is `512`.
+- `--crop-scale`: square crop size relative to the detected face box before resizing to `--work-size`.
 - `--fine-alpha`: fine texture transfer strength.
 - `--mid-alpha`: mid-frequency structure transfer strength for eyes, lips, nose, and inner facial contours.
 - `--fine-sigma`: fine detail extraction sigma.
@@ -64,13 +72,19 @@ python face_detail_transfer.py `
 
 ## What It Does
 
-1. Detects the largest source and target face with InsightFace.
-2. Uses 106-point landmarks and Delaunay triangles to locally warp the source face into target coordinates.
-3. Extracts fine and mid-frequency luminance detail from the warped source face.
-4. Builds a conservative target-face mask and softens it with distance-transform feathering.
-5. Adds the source detail into the target LAB luminance channel through the soft face mask.
+1. Detects the largest source and target face with InsightFace at `--det-size`.
+2. Crops each face to a fixed 512 x 512 working image so small faces are processed at a stable scale.
+3. Redetects landmarks inside the fixed crop at `--crop-det-size`.
+4. Uses 106-point landmarks and Delaunay triangles to locally warp the source face into target coordinates.
+5. Extracts fine and mid-frequency luminance detail from the warped source face.
+6. Builds a conservative target-face mask and softens it with distance-transform feathering.
+7. Adds the source detail into the target LAB luminance channel through the soft face mask, then pastes the enhanced crop back.
 
 The target color, lighting, and low-frequency shape are preserved. Only matched face detail is transferred.
+If the face is extremely small in the final target image, the visible result is still limited by the final pixel count:
+the 512 crop improves detection and transfer stability, but it cannot display pore-level detail inside a 30-pixel face.
+For small faces, judge the effect by zooming in or writing `--mask-out`; at native size the change is intentionally subtle
+to avoid sharpening halos and texture artifacts.
 
 ## Evaluation
 

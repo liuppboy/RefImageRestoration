@@ -2,11 +2,28 @@ import numpy as np
 
 from face_detail_transfer import (
     build_feather_mask,
+    crop_face_square,
+    detect_largest_face_with_fallback,
     extract_luminance_detail,
     extract_multiband_details,
     fuse_multiband_luminance_detail,
     fuse_luminance_detail,
+    paste_face_crop,
 )
+
+
+class FakeFace:
+    def __init__(self, bbox):
+        self.bbox = np.asarray(bbox, dtype=np.float32)
+        self.landmark_2d_106 = np.zeros((106, 2), dtype=np.float32)
+
+
+class FakeApp:
+    def __init__(self, faces):
+        self.faces = faces
+
+    def get(self, image):
+        return self.faces
 
 
 def test_extract_luminance_detail_has_near_zero_mean_on_smooth_gradient():
@@ -91,3 +108,42 @@ def test_build_feather_mask_has_soft_interior_edge():
     assert mask[32, 32] > 0.95
     assert mask[16, 32] == 0
     assert 0 < mask[22, 32] < 1
+
+
+def test_crop_face_square_returns_fixed_work_size_and_valid_box():
+    image = np.zeros((120, 160, 3), dtype=np.uint8)
+    bbox = np.asarray([60, 40, 90, 70], dtype=np.float32)
+
+    crop, box = crop_face_square(image, bbox, work_size=512, scale=2.0)
+
+    assert crop.shape == (512, 512, 3)
+    x1, y1, x2, y2 = box
+    assert x2 - x1 == y2 - y1
+    assert x1 <= 60 <= x2
+    assert y1 <= 40 <= y2
+    assert x1 >= 0
+    assert y1 >= 0
+    assert x2 <= image.shape[1]
+    assert y2 <= image.shape[0]
+
+
+def test_paste_face_crop_only_changes_masked_target_box():
+    target = np.zeros((32, 32, 3), dtype=np.uint8)
+    crop = np.full((8, 8, 3), 100, dtype=np.uint8)
+    mask = np.ones((8, 8), dtype=np.float32)
+
+    pasted = paste_face_crop(target, crop, mask, box=(8, 10, 16, 18))
+
+    assert pasted[9, 12, 0] == 0
+    assert pasted[10, 8, 0] == 100
+    assert pasted[17, 15, 0] == 100
+    assert pasted[18, 15, 0] == 0
+
+
+def test_detect_largest_face_with_fallback_tries_next_detector():
+    image = np.zeros((16, 16, 3), dtype=np.uint8)
+    face = FakeFace([1, 2, 9, 12])
+
+    detected = detect_largest_face_with_fallback([FakeApp([]), FakeApp([face])], image)
+
+    np.testing.assert_allclose(detected.bbox, face.bbox)
