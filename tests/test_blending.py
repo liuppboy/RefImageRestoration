@@ -301,6 +301,21 @@ def test_load_batch_items_accepts_object_with_items_list(tmp_path):
     assert items[0].target == tmp_path / "b.png"
 
 
+def test_load_batch_items_can_use_target_dir_with_source_file_name(tmp_path):
+    batch_json = tmp_path / "cases.json"
+    batch_json.write_text(
+        json.dumps([{"input_image": "sources/source_a.jpg"}]),
+        encoding="utf-8",
+    )
+    target_dir = tmp_path / "targets"
+
+    items = load_batch_items(batch_json, source_key="input_image", target_dir=target_dir)
+
+    assert len(items) == 1
+    assert items[0].source == tmp_path / "sources" / "source_a.jpg"
+    assert items[0].target == target_dir / "source_a.jpg"
+
+
 def test_output_path_for_source_uses_source_stem_and_png_suffix(tmp_path):
     output = output_path_for_source("nested/person.face.jpg", tmp_path)
 

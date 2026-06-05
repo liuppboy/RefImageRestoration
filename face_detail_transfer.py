@@ -679,7 +679,15 @@ def resolve_json_path(value: object, base_dir: Path, key: str) -> Path:
     return path
 
 
-def load_batch_items(json_path: str | Path, source_key: str, target_key: str) -> list[BatchItem]:
+def load_batch_items(
+    json_path: str | Path,
+    source_key: str,
+    target_key: str | None = None,
+    target_dir: str | Path | None = None,
+) -> list[BatchItem]:
+    if target_key is None and target_dir is None:
+        raise ValueError("Batch mode requires either target_key or target_dir.")
+
     path = Path(json_path)
     with path.open("r", encoding="utf-8") as f:
         data = json.load(f)
@@ -696,12 +704,18 @@ def load_batch_items(json_path: str | Path, source_key: str, target_key: str) ->
             raise ValueError(f"Batch item {index} must be an object.")
         if source_key not in entry:
             raise ValueError(f"Batch item {index} is missing source key '{source_key}'.")
-        if target_key not in entry:
-            raise ValueError(f"Batch item {index} is missing target key '{target_key}'.")
+        source = resolve_json_path(entry[source_key], base_dir, source_key)
+        if target_dir is not None:
+            target = Path(target_dir) / source.name
+        else:
+            assert target_key is not None
+            if target_key not in entry:
+                raise ValueError(f"Batch item {index} is missing target key '{target_key}'.")
+            target = resolve_json_path(entry[target_key], base_dir, target_key)
         items.append(
             BatchItem(
-                source=resolve_json_path(entry[source_key], base_dir, source_key),
-                target=resolve_json_path(entry[target_key], base_dir, target_key),
+                source=source,
+                target=target,
             )
         )
 
@@ -719,7 +733,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--out", default=None, help="Enhanced output image path for single-image mode.")
     parser.add_argument("--input-json", default=None, help="Batch JSON path. Use a list or an object with an 'items' list.")
     parser.add_argument("--source-key", default="source", help="Source image key in each batch JSON item.")
-    parser.add_argument("--target-key", default="target", help="Target image key in each batch JSON item.")
+    parser.add_argument("--target-dir", default=None, help="Batch target directory. Target file name must match source file name.")
+    parser.add_argument("--target-key", default=None, help="Optional target image key in each batch JSON item.")
     parser.add_argument("--out-dir", default=None, help="Batch output directory. Output names use source stem with .png suffix.")
     parser.add_argument("--mask-out", default=None, help="Optional debug mask output path.")
     parser.add_argument("--debug-dir", default=None, help="Optional directory for crop, diff, and stats debug outputs.")
@@ -794,6 +809,8 @@ def validate_args(args: argparse.Namespace) -> None:
         missing = [name for name in ["out_dir"] if getattr(args, name) is None]
         if missing:
             raise ValueError("--input-json requires --out-dir.")
+        if args.target_dir is None and args.target_key is None:
+            raise ValueError("--input-json requires --target-dir, or --target-key for legacy JSON files.")
         if args.mask_out:
             raise ValueError("--mask-out is only supported in single-image mode.")
         return
@@ -815,7 +832,7 @@ def main() -> None:
     if args.input_json:
         out_dir = Path(args.out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
-        items = load_batch_items(args.input_json, args.source_key, args.target_key)
+        items = load_batch_items(args.input_json, args.source_key, target_key=args.target_key, target_dir=args.target_dir)
         for item in items:
             output_path = output_path_for_source(item.source, out_dir)
             debug_dir = None

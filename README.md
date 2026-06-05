@@ -52,20 +52,19 @@ pip-installed CUDA/cuDNN runtime libraries can be found without manually editing
 
 ## Batch JSON
 
-Batch mode reads a JSON file and writes PNG outputs to a directory. The output file name is based on the source image
-name, with the suffix changed to `.png`.
+Batch mode reads source image paths from a JSON file, finds the target image with the same file name in `--target-dir`,
+and writes PNG outputs to a directory. The output file name is based on the source image name, with the suffix changed
+to `.png`.
 
 Example JSON:
 
 ```json
 [
   {
-    "input_image": "source_a.jpg",
-    "flux_image": "target_a.jpg"
+    "input_image": "source_a.jpg"
   },
   {
-    "input_image": "source_b.png",
-    "flux_image": "target_b.png"
+    "input_image": "source_b.png"
   }
 ]
 ```
@@ -76,29 +75,36 @@ Run:
 python face_detail_transfer.py `
   --input-json cases.json `
   --source-key input_image `
-  --target-key flux_image `
+  --target-dir flux_outputs `
   --out-dir enhanced_outputs `
   --providers CUDAExecutionProvider,CPUExecutionProvider
 ```
 
-Relative image paths in the JSON are resolved relative to the JSON file. The JSON can also be:
+Relative source image paths in the JSON are resolved relative to the JSON file. If a source path is
+`inputs/source_a.jpg`, the target is read from `flux_outputs/source_a.jpg`, and the output is written to
+`enhanced_outputs/source_a.png`.
+
+The JSON can also be:
 
 ```json
 {
   "items": [
     {
-      "source": "source_a.png",
-      "target": "target_a.png"
+      "source": "source_a.png"
     }
   ]
 }
 ```
 
+Legacy JSON files with both source and target paths are still supported by using `--target-key` instead of
+`--target-dir`.
+
 ## Important Parameters
 
 - `--input-json`: batch JSON path. Use with `--out-dir`.
 - `--source-key`: source image key in each JSON item. Default: `source`.
-- `--target-key`: target image key in each JSON item. Default: `target`.
+- `--target-dir`: target image directory for batch mode. The target file name must match the source file name.
+- `--target-key`: optional target image key for legacy batch JSON files.
 - `--out-dir`: batch output directory. Outputs are named from source stem with `.png` suffix.
 - `--det-size`: InsightFace detection resolution. The default is `1024`, which is more reliable for small faces.
 - `--crop-det-size`: InsightFace detection resolution inside the fixed face crop. The default is `512`, which is more stable for close face crops.
