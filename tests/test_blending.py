@@ -16,6 +16,7 @@ from face_detail_transfer import (
     extract_multiband_details,
     fuse_multiband_luminance_detail,
     fuse_luminance_detail,
+    enhance_image_face_detail,
     load_batch_items,
     mean_abs_diff_in_mask,
     output_path_for_source,
@@ -332,3 +333,22 @@ def test_preload_onnxruntime_cuda_dlls_only_for_cuda_provider(monkeypatch):
 
     preload_onnxruntime_cuda_dlls(["CUDAExecutionProvider", "CPUExecutionProvider"])
     assert calls == [""]
+
+
+def test_enhance_image_face_detail_passthroughs_target_when_no_face_detected(tmp_path):
+    source = np.full((32, 32, 3), 25, dtype=np.uint8)
+    target = np.full((32, 32, 3), 80, dtype=np.uint8)
+
+    enhanced, mask = enhance_image_face_detail(
+        FakeApp([]),
+        source,
+        target,
+        debug_dir=tmp_path,
+    )
+
+    np.testing.assert_array_equal(enhanced, target)
+    assert mask.shape == target.shape[:2]
+    assert float(mask.max()) == 0.0
+    stats = (tmp_path / "stats.txt").read_text(encoding="utf-8")
+    assert "status: skipped" in stats
+    assert "No face detected" in stats

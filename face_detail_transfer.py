@@ -308,6 +308,24 @@ def mean_abs_diff_in_mask(a: np.ndarray, b: np.ndarray, mask: np.ndarray, thresh
     return float(diff[active].mean())
 
 
+def passthrough_target(target_bgr: np.ndarray, debug_dir: str | Path | None = None, reason: str = "") -> tuple[np.ndarray, np.ndarray]:
+    mask = np.zeros(target_bgr.shape[:2], dtype=np.float32)
+    if debug_dir is not None:
+        debug_path = Path(debug_dir)
+        debug_path.mkdir(parents=True, exist_ok=True)
+        write_debug_image(debug_path / "enhanced.png", target_bgr)
+        write_debug_image(debug_path / "final_diff_x8.png", np.zeros_like(target_bgr))
+        stats = [
+            "status: skipped",
+            f"reason: {reason}",
+            "final_mask_pixels_gt_0.15: 0",
+            "final_mean_abs_diff_in_mask: 0.0000",
+            "final_max_abs_diff: 0",
+        ]
+        (debug_path / "stats.txt").write_text("\n".join(stats) + "\n", encoding="utf-8")
+    return target_bgr.copy(), mask
+
+
 def scale_detail_sigmas_for_paste_size(
     fine_sigma: float,
     mid_sigma: float,
@@ -581,14 +599,20 @@ def enhance_image_face_detail(
 ) -> tuple[np.ndarray, np.ndarray]:
     crop_app = crop_app or app
     full_detectors = [app] if crop_app is app else [app, crop_app]
-    source_full_face = detect_largest_face_with_fallback(full_detectors, source_bgr)
-    target_full_face = detect_largest_face_with_fallback(full_detectors, target_bgr)
+    try:
+        source_full_face = detect_largest_face_with_fallback(full_detectors, source_bgr)
+        target_full_face = detect_largest_face_with_fallback(full_detectors, target_bgr)
+    except RuntimeError as exc:
+        return passthrough_target(target_bgr, debug_dir=debug_dir, reason=str(exc))
 
     source_crop, _ = crop_face_square(source_bgr, source_full_face.bbox, work_size=work_size, scale=crop_scale)
     target_crop, target_box = crop_face_square(target_bgr, target_full_face.bbox, work_size=work_size, scale=crop_scale)
 
-    source_crop_face = detect_largest_face(crop_app, source_crop)
-    target_crop_face = detect_largest_face(crop_app, target_crop)
+    try:
+        source_crop_face = detect_largest_face(crop_app, source_crop)
+        target_crop_face = detect_largest_face(crop_app, target_crop)
+    except RuntimeError as exc:
+        return passthrough_target(target_bgr, debug_dir=debug_dir, reason=str(exc))
     effective_fine_sigma = fine_sigma
     effective_mid_sigma = mid_sigma
     if scale_aware_sigma:

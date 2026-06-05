@@ -84,6 +84,9 @@ Relative source image paths in the JSON are resolved relative to the JSON file. 
 `inputs/source_a.jpg`, the target is read from `flux_outputs/source_a.jpg`, and the output is written to
 `enhanced_outputs/source_a.png`.
 
+If no face is detected in the source or target image, the tool writes the original target image to the output path
+instead of failing the batch.
+
 The JSON can also be:
 
 ```json
