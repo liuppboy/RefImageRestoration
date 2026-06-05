@@ -1,3 +1,7 @@
+import json
+import sys
+from types import SimpleNamespace
+
 import numpy as np
 
 from face_detail_transfer import (
@@ -12,8 +16,11 @@ from face_detail_transfer import (
     extract_multiband_details,
     fuse_multiband_luminance_detail,
     fuse_luminance_detail,
+    load_batch_items,
     mean_abs_diff_in_mask,
+    output_path_for_source,
     paste_face_crop,
+    preload_onnxruntime_cuda_dlls,
     scale_detail_sigmas_for_paste_size,
 )
 
@@ -257,3 +264,56 @@ def test_mean_abs_diff_in_mask_uses_only_active_region():
     mean_diff = mean_abs_diff_in_mask(a, b, mask)
 
     assert mean_diff == 9.0
+
+
+def test_load_batch_items_uses_configured_keys_and_json_relative_paths(tmp_path):
+    batch_json = tmp_path / "cases.json"
+    batch_json.write_text(
+        json.dumps(
+            [
+                {
+                    "input_image": "source_a.jpg",
+                    "edited_image": "target_a.png",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    items = load_batch_items(batch_json, source_key="input_image", target_key="edited_image")
+
+    assert len(items) == 1
+    assert items[0].source == tmp_path / "source_a.jpg"
+    assert items[0].target == tmp_path / "target_a.png"
+
+
+def test_load_batch_items_accepts_object_with_items_list(tmp_path):
+    batch_json = tmp_path / "cases.json"
+    batch_json.write_text(
+        json.dumps({"items": [{"source": "a.png", "target": "b.png"}]}),
+        encoding="utf-8",
+    )
+
+    items = load_batch_items(batch_json, source_key="source", target_key="target")
+
+    assert len(items) == 1
+    assert items[0].source == tmp_path / "a.png"
+    assert items[0].target == tmp_path / "b.png"
+
+
+def test_output_path_for_source_uses_source_stem_and_png_suffix(tmp_path):
+    output = output_path_for_source("nested/person.face.jpg", tmp_path)
+
+    assert output == tmp_path / "person.face.png"
+
+
+def test_preload_onnxruntime_cuda_dlls_only_for_cuda_provider(monkeypatch):
+    calls = []
+    fake_ort = SimpleNamespace(preload_dlls=lambda directory: calls.append(directory))
+    monkeypatch.setitem(sys.modules, "onnxruntime", fake_ort)
+
+    preload_onnxruntime_cuda_dlls(["CPUExecutionProvider"])
+    assert calls == []
+
+    preload_onnxruntime_cuda_dlls(["CUDAExecutionProvider", "CPUExecutionProvider"])
+    assert calls == [""]

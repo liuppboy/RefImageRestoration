@@ -12,7 +12,7 @@ python download_models.py
 
 `download_models.py` initializes InsightFace `buffalo_l`, which includes SCRFD face detection and 106-point landmarks.
 
-## Run
+## Single Image
 
 ```powershell
 python face_detail_transfer.py `
@@ -47,8 +47,59 @@ The default ONNX Runtime provider is CPU. If you install a compatible GPU build,
 --providers CUDAExecutionProvider,CPUExecutionProvider
 ```
 
+When CUDA is requested, the tool calls `onnxruntime.preload_dlls(directory="")` before InsightFace initializes, so
+pip-installed CUDA/cuDNN runtime libraries can be found without manually editing `LD_LIBRARY_PATH`.
+
+## Batch JSON
+
+Batch mode reads a JSON file and writes PNG outputs to a directory. The output file name is based on the source image
+name, with the suffix changed to `.png`.
+
+Example JSON:
+
+```json
+[
+  {
+    "input_image": "source_a.jpg",
+    "flux_image": "target_a.jpg"
+  },
+  {
+    "input_image": "source_b.png",
+    "flux_image": "target_b.png"
+  }
+]
+```
+
+Run:
+
+```powershell
+python face_detail_transfer.py `
+  --input-json cases.json `
+  --source-key input_image `
+  --target-key flux_image `
+  --out-dir enhanced_outputs `
+  --providers CUDAExecutionProvider,CPUExecutionProvider
+```
+
+Relative image paths in the JSON are resolved relative to the JSON file. The JSON can also be:
+
+```json
+{
+  "items": [
+    {
+      "source": "source_a.png",
+      "target": "target_a.png"
+    }
+  ]
+}
+```
+
 ## Important Parameters
 
+- `--input-json`: batch JSON path. Use with `--out-dir`.
+- `--source-key`: source image key in each JSON item. Default: `source`.
+- `--target-key`: target image key in each JSON item. Default: `target`.
+- `--out-dir`: batch output directory. Outputs are named from source stem with `.png` suffix.
 - `--det-size`: InsightFace detection resolution. The default is `1024`, which is more reliable for small faces.
 - `--crop-det-size`: InsightFace detection resolution inside the fixed face crop. The default is `512`, which is more stable for close face crops.
 - `--work-size`: fixed square face crop size used for transfer. The default is `512`.

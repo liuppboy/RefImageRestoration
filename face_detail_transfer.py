@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -13,6 +14,12 @@ import numpy as np
 class FaceInfo:
     bbox: np.ndarray
     landmarks: np.ndarray
+
+
+@dataclass
+class BatchItem:
+    source: Path
+    target: Path
 
 
 def read_image(path: str | Path) -> np.ndarray:
@@ -146,7 +153,22 @@ def build_plateau_blend_mask(binary_mask: np.ndarray, erode_px: int, feather_px:
     return np.clip(mask, 0.0, 1.0).astype(np.float32)
 
 
+def preload_onnxruntime_cuda_dlls(providers: list[str]) -> None:
+    if "CUDAExecutionProvider" not in providers:
+        return
+
+    try:
+        import onnxruntime as ort
+    except ImportError:
+        return
+
+    preload = getattr(ort, "preload_dlls", None)
+    if callable(preload):
+        preload(directory="")
+
+
 def load_insightface(model_name: str, models_dir: str | Path, det_size: int, providers: list[str]):
+    preload_onnxruntime_cuda_dlls(providers)
     try:
         from insightface.app import FaceAnalysis
     except ImportError as exc:
@@ -647,11 +669,58 @@ def parse_providers(value: str) -> list[str]:
     return providers or ["CPUExecutionProvider"]
 
 
+def resolve_json_path(value: object, base_dir: Path, key: str) -> Path:
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"Batch item key '{key}' must be a non-empty string path.")
+
+    path = Path(value)
+    if not path.is_absolute():
+        path = base_dir / path
+    return path
+
+
+def load_batch_items(json_path: str | Path, source_key: str, target_key: str) -> list[BatchItem]:
+    path = Path(json_path)
+    with path.open("r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    if isinstance(data, dict) and "items" in data:
+        data = data["items"]
+    if not isinstance(data, list):
+        raise ValueError("Batch JSON must be a list, or an object with an 'items' list.")
+
+    base_dir = path.resolve().parent
+    items: list[BatchItem] = []
+    for index, entry in enumerate(data):
+        if not isinstance(entry, dict):
+            raise ValueError(f"Batch item {index} must be an object.")
+        if source_key not in entry:
+            raise ValueError(f"Batch item {index} is missing source key '{source_key}'.")
+        if target_key not in entry:
+            raise ValueError(f"Batch item {index} is missing target key '{target_key}'.")
+        items.append(
+            BatchItem(
+                source=resolve_json_path(entry[source_key], base_dir, source_key),
+                target=resolve_json_path(entry[target_key], base_dir, target_key),
+            )
+        )
+
+    return items
+
+
+def output_path_for_source(source: str | Path, out_dir: str | Path) -> Path:
+    return Path(out_dir) / f"{Path(source).stem}.png"
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Transfer native source face detail into a Flux I2I target face.")
-    parser.add_argument("--source", required=True, help="Source/input image path.")
-    parser.add_argument("--target", required=True, help="Flux output/target image path.")
-    parser.add_argument("--out", required=True, help="Enhanced output image path.")
+    parser.add_argument("--source", default=None, help="Source/input image path for single-image mode.")
+    parser.add_argument("--target", default=None, help="Flux output/target image path for single-image mode.")
+    parser.add_argument("--out", default=None, help="Enhanced output image path for single-image mode.")
+    parser.add_argument("--input-json", default=None, help="Batch JSON path. Use a list or an object with an 'items' list.")
+    parser.add_argument("--source-key", default="source", help="Source image key in each batch JSON item.")
+    parser.add_argument("--target-key", default="target", help="Target image key in each batch JSON item.")
+    parser.add_argument("--out-dir", default=None, help="Batch output directory. Output names use source stem with .png suffix.")
     parser.add_argument("--mask-out", default=None, help="Optional debug mask output path.")
     parser.add_argument("--debug-dir", default=None, help="Optional directory for crop, diff, and stats debug outputs.")
     parser.add_argument("--models-dir", default="models/insightface", help="InsightFace model root.")
@@ -679,14 +748,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main() -> None:
-    args = build_arg_parser().parse_args()
-    source = read_image(args.source)
-    target = read_image(args.target)
-
-    providers = parse_providers(args.providers)
-    app = load_insightface(args.model_name, args.models_dir, args.det_size, providers)
-    crop_app = load_insightface(args.model_name, args.models_dir, args.crop_det_size, providers)
+def enhance_one_from_paths(
+    app: object,
+    crop_app: object,
+    source_path: str | Path,
+    target_path: str | Path,
+    output_path: str | Path,
+    args: argparse.Namespace,
+    mask_output_path: str | Path | None = None,
+    debug_dir: str | Path | None = None,
+) -> None:
+    source = read_image(source_path)
+    target = read_image(target_path)
     enhanced, mask = enhance_image_face_detail(
         app,
         source,
@@ -709,11 +782,58 @@ def main() -> None:
         detail_mode=args.detail_mode,
         min_crop_mean_diff=args.min_crop_mean_diff,
         max_auto_detail_gain=args.max_auto_detail_gain,
+        debug_dir=debug_dir,
+    )
+    write_image(output_path, enhanced)
+    if mask_output_path:
+        write_image(mask_output_path, (np.clip(mask, 0, 1) * 255).astype(np.uint8))
+
+
+def validate_args(args: argparse.Namespace) -> None:
+    if args.input_json:
+        missing = [name for name in ["out_dir"] if getattr(args, name) is None]
+        if missing:
+            raise ValueError("--input-json requires --out-dir.")
+        if args.mask_out:
+            raise ValueError("--mask-out is only supported in single-image mode.")
+        return
+
+    missing = [name for name in ["source", "target", "out"] if getattr(args, name) is None]
+    if missing:
+        formatted = ", ".join(f"--{name.replace('_', '-')}" for name in missing)
+        raise ValueError(f"Single-image mode requires {formatted}.")
+
+
+def main() -> None:
+    args = build_arg_parser().parse_args()
+    validate_args(args)
+
+    providers = parse_providers(args.providers)
+    app = load_insightface(args.model_name, args.models_dir, args.det_size, providers)
+    crop_app = load_insightface(args.model_name, args.models_dir, args.crop_det_size, providers)
+
+    if args.input_json:
+        out_dir = Path(args.out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        items = load_batch_items(args.input_json, args.source_key, args.target_key)
+        for item in items:
+            output_path = output_path_for_source(item.source, out_dir)
+            debug_dir = None
+            if args.debug_dir:
+                debug_dir = Path(args.debug_dir) / item.source.stem
+            enhance_one_from_paths(app, crop_app, item.source, item.target, output_path, args, debug_dir=debug_dir)
+        return
+
+    enhance_one_from_paths(
+        app,
+        crop_app,
+        args.source,
+        args.target,
+        args.out,
+        args,
+        mask_output_path=args.mask_out,
         debug_dir=args.debug_dir,
     )
-    write_image(args.out, enhanced)
-    if args.mask_out:
-        write_image(args.mask_out, (np.clip(mask, 0, 1) * 255).astype(np.uint8))
 
 
 if __name__ == "__main__":
