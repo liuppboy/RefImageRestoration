@@ -22,6 +22,9 @@ class BatchItem:
     target: Path
 
 
+IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff")
+
+
 def read_image(path: str | Path) -> np.ndarray:
     data = np.fromfile(str(path), dtype=np.uint8)
     image = cv2.imdecode(data, cv2.IMREAD_COLOR)
@@ -703,6 +706,28 @@ def resolve_json_path(value: object, base_dir: Path, key: str) -> Path:
     return path
 
 
+def find_target_by_source_stem(source: str | Path, target_dir: str | Path) -> Path:
+    source_path = Path(source)
+    directory = Path(target_dir)
+    matches = [
+        candidate
+        for candidate in directory.iterdir()
+        if candidate.is_file()
+        and candidate.stem == source_path.stem
+        and candidate.suffix.lower() in IMAGE_SUFFIXES
+    ]
+    if not matches:
+        suffixes = ", ".join(IMAGE_SUFFIXES)
+        raise FileNotFoundError(
+            f"No target image found for source stem '{source_path.stem}' in {directory}. "
+            f"Expected one of: {suffixes}"
+        )
+    if len(matches) > 1:
+        formatted = ", ".join(str(path) for path in sorted(matches))
+        raise ValueError(f"Multiple target images found for source stem '{source_path.stem}': {formatted}")
+    return matches[0]
+
+
 def load_batch_items(
     json_path: str | Path,
     source_key: str,
@@ -730,7 +755,7 @@ def load_batch_items(
             raise ValueError(f"Batch item {index} is missing source key '{source_key}'.")
         source = resolve_json_path(entry[source_key], base_dir, source_key)
         if target_dir is not None:
-            target = Path(target_dir) / source.name
+            target = find_target_by_source_stem(source, target_dir)
         else:
             assert target_key is not None
             if target_key not in entry:

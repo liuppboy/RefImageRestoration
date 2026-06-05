@@ -17,6 +17,7 @@ from face_detail_transfer import (
     fuse_multiband_luminance_detail,
     fuse_luminance_detail,
     enhance_image_face_detail,
+    find_target_by_source_stem,
     load_batch_items,
     mean_abs_diff_in_mask,
     output_path_for_source,
@@ -302,19 +303,35 @@ def test_load_batch_items_accepts_object_with_items_list(tmp_path):
     assert items[0].target == tmp_path / "b.png"
 
 
-def test_load_batch_items_can_use_target_dir_with_source_file_name(tmp_path):
+def test_load_batch_items_can_use_target_dir_with_source_stem(tmp_path):
     batch_json = tmp_path / "cases.json"
     batch_json.write_text(
         json.dumps([{"input_image": "sources/source_a.jpg"}]),
         encoding="utf-8",
     )
     target_dir = tmp_path / "targets"
+    target_dir.mkdir()
+    (target_dir / "source_a.png").write_bytes(b"not an actual image")
 
     items = load_batch_items(batch_json, source_key="input_image", target_dir=target_dir)
 
     assert len(items) == 1
     assert items[0].source == tmp_path / "sources" / "source_a.jpg"
-    assert items[0].target == target_dir / "source_a.jpg"
+    assert items[0].target == target_dir / "source_a.png"
+
+
+def test_find_target_by_source_stem_rejects_ambiguous_matches(tmp_path):
+    target_dir = tmp_path / "targets"
+    target_dir.mkdir()
+    (target_dir / "source_a.png").write_bytes(b"not an actual image")
+    (target_dir / "source_a.jpg").write_bytes(b"not an actual image")
+
+    try:
+        find_target_by_source_stem("source_a.webp", target_dir)
+    except ValueError as exc:
+        assert "Multiple target images" in str(exc)
+    else:
+        raise AssertionError("Expected ambiguous target match to raise ValueError")
 
 
 def test_output_path_for_source_uses_source_stem_and_png_suffix(tmp_path):

@@ -52,9 +52,9 @@ pip-installed CUDA/cuDNN runtime libraries can be found without manually editing
 
 ## Batch JSON
 
-Batch mode reads source image paths from a JSON file, finds the target image with the same file name in `--target-dir`,
-and writes PNG outputs to a directory. The output file name is based on the source image name, with the suffix changed
-to `.png`.
+Batch mode reads source image paths from a JSON file, finds the target image with the same stem in `--target-dir`,
+and writes PNG outputs to a directory. Source and target suffixes can differ. The output file name is based on the
+source image name, with the suffix changed to `.png`.
 
 Example JSON:
 
@@ -81,8 +81,9 @@ python face_detail_transfer.py `
 ```
 
 Relative source image paths in the JSON are resolved relative to the JSON file. If a source path is
-`inputs/source_a.jpg`, the target is read from `flux_outputs/source_a.jpg`, and the output is written to
-`enhanced_outputs/source_a.png`.
+`inputs/source_a.jpg`, the target can be `flux_outputs/source_a.png`, `flux_outputs/source_a.jpg`, etc., and the output
+is written to `enhanced_outputs/source_a.png`. If multiple target files have the same stem, the tool raises an error
+instead of guessing.
 
 If no face is detected in the source or target image, the tool writes the original target image to the output path
 instead of failing the batch.
@@ -106,7 +107,7 @@ Legacy JSON files with both source and target paths are still supported by using
 
 - `--input-json`: batch JSON path. Use with `--out-dir`.
 - `--source-key`: source image key in each JSON item. Default: `source`.
-- `--target-dir`: target image directory for batch mode. The target file name must match the source file name.
+- `--target-dir`: target image directory for batch mode. The target stem must match the source stem; suffix can differ.
 - `--target-key`: optional target image key for legacy batch JSON files.
 - `--out-dir`: batch output directory. Outputs are named from source stem with `.png` suffix.
 - `--det-size`: InsightFace detection resolution. The default is `1024`, which is more reliable for small faces.
