@@ -89,11 +89,24 @@ def fuse_multiband_luminance_detail(
     mid_alpha: float,
     fine_max_detail: float,
     mid_max_detail: float,
+    target_fine_detail: np.ndarray | None = None,
+    target_mid_detail: np.ndarray | None = None,
+    mode: str = "add",
 ) -> np.ndarray:
     target = target_l.astype(np.float32)
     soft_mask = np.clip(mask.astype(np.float32), 0.0, 1.0)
     fine = np.clip(fine_detail.astype(np.float32), -fine_max_detail, fine_max_detail)
     mid = np.clip(mid_detail.astype(np.float32), -mid_max_detail, mid_max_detail)
+    if mode == "replace":
+        if target_fine_detail is None or target_mid_detail is None:
+            raise ValueError("replace mode requires target fine and mid detail bands")
+        target_fine = np.clip(target_fine_detail.astype(np.float32), -fine_max_detail, fine_max_detail)
+        target_mid = np.clip(target_mid_detail.astype(np.float32), -mid_max_detail, mid_max_detail)
+        fine = fine - target_fine
+        mid = mid - target_mid
+    elif mode != "add":
+        raise ValueError(f"Unsupported detail mode: {mode}")
+
     fused = target + soft_mask * (float(fine_alpha) * fine + float(mid_alpha) * mid)
     return np.clip(fused, 0, 255).astype(np.float32)
 
@@ -254,6 +267,23 @@ def paste_mask(
         return full_mask
     full_mask[y1:y2, x1:x2] = cv2.resize(mask.astype(np.float32), (width, height), interpolation=cv2.INTER_LINEAR)
     return np.clip(full_mask, 0.0, 1.0)
+
+
+def write_debug_image(path: Path, image: np.ndarray) -> None:
+    write_image(path, image)
+
+
+def absdiff_visual(a: np.ndarray, b: np.ndarray, gain: float = 8.0) -> np.ndarray:
+    diff = cv2.absdiff(a, b).astype(np.float32)
+    return np.clip(diff * float(gain), 0, 255).astype(np.uint8)
+
+
+def mean_abs_diff_in_mask(a: np.ndarray, b: np.ndarray, mask: np.ndarray, threshold: float = 0.15) -> float:
+    active = mask > threshold
+    if not active.any():
+        return 0.0
+    diff = cv2.absdiff(a, b)
+    return float(diff[active].mean())
 
 
 def scale_detail_sigmas_for_paste_size(
@@ -449,6 +479,7 @@ def enhance_face_detail(
     mask_erode: int = 8,
     mask_feather: int = 36,
     mask_region_scale: float = 0.85,
+    detail_mode: str = "add",
 ) -> tuple[np.ndarray, np.ndarray]:
     if source_bgr.shape[:2] != target_bgr.shape[:2]:
         source_bgr = cv2.resize(source_bgr, (target_bgr.shape[1], target_bgr.shape[0]), interpolation=cv2.INTER_CUBIC)
@@ -475,6 +506,15 @@ def enhance_face_detail(
         fine_sigma=fine_sigma,
         mid_sigma=mid_sigma,
     )
+    target_fine_detail = None
+    target_mid_detail = None
+    if detail_mode == "replace":
+        target_fine_detail, target_mid_detail = extract_multiband_details(
+            target_l,
+            fine_sigma=fine_sigma,
+            mid_sigma=mid_sigma,
+        )
+
     target_lab[:, :, 0] = fuse_multiband_luminance_detail(
         target_l,
         fine_detail,
@@ -484,6 +524,9 @@ def enhance_face_detail(
         mid_alpha=mid_alpha,
         fine_max_detail=fine_max_detail,
         mid_max_detail=mid_max_detail,
+        target_fine_detail=target_fine_detail,
+        target_mid_detail=target_mid_detail,
+        mode=detail_mode,
     )
 
     enhanced = cv2.cvtColor(np.clip(target_lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
@@ -509,6 +552,10 @@ def enhance_image_face_detail(
     scale_aware_sigma: bool = True,
     sigma_scale_power: float = 0.5,
     max_sigma_scale: float = 2.0,
+    detail_mode: str = "add",
+    min_crop_mean_diff: float = 2.5,
+    max_auto_detail_gain: float = 2.0,
+    debug_dir: str | Path | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     crop_app = crop_app or app
     full_detectors = [app] if crop_app is app else [app, crop_app]
@@ -532,23 +579,66 @@ def enhance_image_face_detail(
             max_scale=max_sigma_scale,
         )
 
-    enhanced_crop, crop_mask = enhance_face_detail(
-        source_crop,
-        target_crop,
-        source_crop_face,
-        target_crop_face,
-        fine_alpha=fine_alpha,
-        mid_alpha=mid_alpha,
-        fine_sigma=effective_fine_sigma,
-        mid_sigma=effective_mid_sigma,
-        fine_max_detail=fine_max_detail,
-        mid_max_detail=mid_max_detail,
-        mask_erode=mask_erode,
-        mask_feather=mask_feather,
-        mask_region_scale=mask_region_scale,
-    )
+    def run_crop_enhance(alpha_scale: float) -> tuple[np.ndarray, np.ndarray]:
+        return enhance_face_detail(
+            source_crop,
+            target_crop,
+            source_crop_face,
+            target_crop_face,
+            fine_alpha=fine_alpha * alpha_scale,
+            mid_alpha=mid_alpha * alpha_scale,
+            fine_sigma=effective_fine_sigma,
+            mid_sigma=effective_mid_sigma,
+            fine_max_detail=fine_max_detail,
+            mid_max_detail=mid_max_detail,
+            mask_erode=mask_erode,
+            mask_feather=mask_feather,
+            mask_region_scale=mask_region_scale,
+            detail_mode=detail_mode,
+        )
+
+    auto_detail_gain = 1.0
+    enhanced_crop, crop_mask = run_crop_enhance(auto_detail_gain)
+    initial_crop_mean_diff = mean_abs_diff_in_mask(enhanced_crop, target_crop, crop_mask)
+    if min_crop_mean_diff > 0 and initial_crop_mean_diff < min_crop_mean_diff:
+        denominator = max(initial_crop_mean_diff, 1e-6)
+        auto_detail_gain = min(float(max_auto_detail_gain), float(min_crop_mean_diff) / denominator)
+        if auto_detail_gain > 1.001:
+            enhanced_crop, crop_mask = run_crop_enhance(auto_detail_gain)
+
     enhanced = paste_face_crop(target_bgr, enhanced_crop, crop_mask, target_box)
     full_mask = paste_mask(target_bgr.shape[:2], crop_mask, target_box)
+    if debug_dir is not None:
+        debug_path = Path(debug_dir)
+        debug_path.mkdir(parents=True, exist_ok=True)
+        write_debug_image(debug_path / "source_crop.png", source_crop)
+        write_debug_image(debug_path / "target_crop.png", target_crop)
+        write_debug_image(debug_path / "enhanced_crop.png", enhanced_crop)
+        write_debug_image(debug_path / "crop_mask.png", (np.clip(crop_mask, 0, 1) * 255).astype(np.uint8))
+        write_debug_image(debug_path / "crop_diff_x8.png", absdiff_visual(enhanced_crop, target_crop, gain=8))
+        write_debug_image(debug_path / "enhanced.png", enhanced)
+        write_debug_image(debug_path / "final_diff_x8.png", absdiff_visual(enhanced, target_bgr, gain=8))
+
+        crop_diff = cv2.absdiff(enhanced_crop, target_crop)
+        final_diff = cv2.absdiff(enhanced, target_bgr)
+        crop_active = crop_mask > 0.15
+        final_active = full_mask > 0.15
+        stats = [
+            f"detail_mode: {detail_mode}",
+            f"target_box: {target_box}",
+            f"effective_fine_sigma: {effective_fine_sigma:.4f}",
+            f"effective_mid_sigma: {effective_mid_sigma:.4f}",
+            f"initial_crop_mean_abs_diff_in_mask: {initial_crop_mean_diff:.4f}",
+            f"auto_detail_gain: {auto_detail_gain:.4f}",
+            f"crop_mask_pixels_gt_0.15: {int(crop_active.sum())}",
+            f"crop_mask_pixels_gt_0.80: {int((crop_mask > 0.8).sum())}",
+            f"final_mask_pixels_gt_0.15: {int(final_active.sum())}",
+            f"crop_mean_abs_diff_in_mask: {float(crop_diff[crop_active].mean()) if crop_active.any() else 0.0:.4f}",
+            f"crop_max_abs_diff: {int(crop_diff.max())}",
+            f"final_mean_abs_diff_in_mask: {float(final_diff[final_active].mean()) if final_active.any() else 0.0:.4f}",
+            f"final_max_abs_diff: {int(final_diff.max())}",
+        ]
+        (debug_path / "stats.txt").write_text("\n".join(stats) + "\n", encoding="utf-8")
     return enhanced, full_mask
 
 
@@ -563,6 +653,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--target", required=True, help="Flux output/target image path.")
     parser.add_argument("--out", required=True, help="Enhanced output image path.")
     parser.add_argument("--mask-out", default=None, help="Optional debug mask output path.")
+    parser.add_argument("--debug-dir", default=None, help="Optional directory for crop, diff, and stats debug outputs.")
     parser.add_argument("--models-dir", default="models/insightface", help="InsightFace model root.")
     parser.add_argument("--model-name", default="buffalo_l", help="InsightFace model pack name.")
     parser.add_argument("--providers", default="CPUExecutionProvider", help="ONNX Runtime providers.")
@@ -572,6 +663,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--crop-scale", type=float, default=2.4, help="Square crop scale relative to detected face bbox.")
     parser.add_argument("--fine-alpha", type=float, default=0.65, help="Fine texture transfer strength.")
     parser.add_argument("--mid-alpha", type=float, default=0.30, help="Mid-frequency structure transfer strength.")
+    parser.add_argument("--detail-mode", choices=["add", "replace"], default="add", help="Add source detail on top, or replace target detail bands with source detail.")
     parser.add_argument("--fine-sigma", type=float, default=1.0, help="Fine detail Gaussian sigma.")
     parser.add_argument("--mid-sigma", type=float, default=3.5, help="Mid-frequency Gaussian sigma.")
     parser.add_argument("--fine-max-detail", type=float, default=18.0, help="Clamp fine detail magnitude in LAB-L units.")
@@ -579,6 +671,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-scale-aware-sigma", action="store_true", help="Disable automatic sigma scaling for small pasted faces.")
     parser.add_argument("--sigma-scale-power", type=float, default=0.5, help="Small-face sigma scaling exponent.")
     parser.add_argument("--max-sigma-scale", type=float, default=2.0, help="Maximum automatic sigma scale for small faces.")
+    parser.add_argument("--min-crop-mean-diff", type=float, default=2.5, help="Auto-boost detail until crop mean absolute diff in mask reaches this value. Use 0 to disable.")
+    parser.add_argument("--max-auto-detail-gain", type=float, default=2.0, help="Maximum automatic alpha gain used by --min-crop-mean-diff.")
     parser.add_argument("--mask-erode", type=int, default=8, help="Shrink face mask inward before feathering.")
     parser.add_argument("--mask-feather", type=int, default=36, help="Gaussian soft-edge feather size.")
     parser.add_argument("--mask-region-scale", type=float, default=0.85, help="Optional bbox-ellipse face mask expansion. Use 0 for landmark hull only.")
@@ -612,6 +706,10 @@ def main() -> None:
         scale_aware_sigma=not args.no_scale_aware_sigma,
         sigma_scale_power=args.sigma_scale_power,
         max_sigma_scale=args.max_sigma_scale,
+        detail_mode=args.detail_mode,
+        min_crop_mean_diff=args.min_crop_mean_diff,
+        max_auto_detail_gain=args.max_auto_detail_gain,
+        debug_dir=args.debug_dir,
     )
     write_image(args.out, enhanced)
     if args.mask_out:

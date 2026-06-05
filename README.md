@@ -20,18 +20,22 @@ python face_detail_transfer.py `
   --target target.png `
   --out enhanced.png `
   --mask-out mask.png `
+  --debug-dir debug_run `
   --det-size 1024 `
   --crop-det-size 512 `
   --work-size 512 `
   --crop-scale 2.4 `
   --fine-alpha 0.65 `
   --mid-alpha 0.30 `
+  --detail-mode add `
   --fine-sigma 1.0 `
   --mid-sigma 3.5 `
   --fine-max-detail 18 `
   --mid-max-detail 18 `
   --sigma-scale-power 0.5 `
   --max-sigma-scale 2.0 `
+  --min-crop-mean-diff 2.5 `
+  --max-auto-detail-gain 2.0 `
   --mask-region-scale 0.85 `
   --mask-erode 8 `
   --mask-feather 36
@@ -51,6 +55,7 @@ The default ONNX Runtime provider is CPU. If you install a compatible GPU build,
 - `--crop-scale`: square crop size relative to the detected face box before resizing to `--work-size`.
 - `--fine-alpha`: fine texture transfer strength.
 - `--mid-alpha`: mid-frequency structure transfer strength for eyes, lips, nose, and inner facial contours.
+- `--detail-mode`: `add` transfers source detail on top of the target. `replace` moves target detail bands toward source detail bands.
 - `--fine-sigma`: fine detail extraction sigma.
 - `--mid-sigma`: mid-frequency extraction sigma.
 - `--fine-max-detail`: clamps fine detail magnitude to reduce speckle and halos.
@@ -58,10 +63,13 @@ The default ONNX Runtime provider is CPU. If you install a compatible GPU build,
 - `--sigma-scale-power`: automatically increases detail extraction sigma when the enhanced 512 crop is pasted back into a smaller face.
 - `--max-sigma-scale`: caps automatic small-face sigma scaling. Increase slightly only when small-face results are still too subtle.
 - `--no-scale-aware-sigma`: disables automatic small-face sigma scaling.
+- `--min-crop-mean-diff`: auto-boosts detail strength when the 512 working crop changes too little inside the mask. Use `0` to disable.
+- `--max-auto-detail-gain`: caps the automatic alpha gain used by `--min-crop-mean-diff`.
 - `--mask-region-scale`: expands the transfer mask with a small bbox-based face ellipse. Use `0` for landmark hull only.
 - `--mask-erode`: shrinks the target face mask inward before fusion.
 - `--mask-feather`: Gaussian soft-edge width. Larger means softer boundaries.
 - `--mask-out`: writes the final soft confidence mask for debugging.
+- `--debug-dir`: writes crop-level and final diff images plus numeric stats.
 
 For a lighter pass:
 
@@ -92,14 +100,21 @@ If the face is extremely small in the final target image, the visible result is 
 the 512 crop improves detection and transfer stability, but it cannot display pore-level detail inside a 30-pixel face.
 For small faces, judge the effect by zooming in or writing `--mask-out`; at native size the change is intentionally subtle
 to avoid sharpening halos and texture artifacts.
-If the mask looks correct but the result is still too subtle on small faces, keep alpha unchanged first and try:
+If the mask looks correct but the result is still too subtle, keep alpha unchanged first and try:
 
 ```powershell
---max-sigma-scale 2.5
+--min-crop-mean-diff 4.0
 ```
 
-This transfers source details at a frequency that survives the final downsample. Raising alpha first is more likely to
-create halos and sharpened artifacts.
+This tells the tool to make the 512 working crop measurably different before pasting it back. If the face is small,
+`--max-sigma-scale 2.5` can also help transfer details at a frequency that survives the final downsample.
+
+When the mask looks right but the output appears unchanged, run with `--debug-dir debug_run` and inspect:
+
+- `debug_run/enhanced_crop.png` versus `debug_run/target_crop.png`: verifies whether the 512 working face changed.
+- `debug_run/crop_diff_x8.png`: visualizes crop-level changes.
+- `debug_run/final_diff_x8.png`: visualizes changes after pasting back.
+- `debug_run/stats.txt`: reports mean and max absolute differences inside the mask.
 
 ## Evaluation
 

@@ -12,6 +12,7 @@ from face_detail_transfer import (
     extract_multiband_details,
     fuse_multiband_luminance_detail,
     fuse_luminance_detail,
+    mean_abs_diff_in_mask,
     paste_face_crop,
     scale_detail_sigmas_for_paste_size,
 )
@@ -99,6 +100,31 @@ def test_fuse_multiband_luminance_detail_weights_and_clamps_bands_independently(
     )
 
     np.testing.assert_allclose(fused, np.full((8, 8), 108, dtype=np.float32))
+
+
+def test_fuse_multiband_luminance_detail_replace_mode_matches_source_bands():
+    target = np.full((8, 8), 100, dtype=np.float32)
+    source_fine = np.full((8, 8), 12, dtype=np.float32)
+    source_mid = np.full((8, 8), 8, dtype=np.float32)
+    target_fine = np.full((8, 8), 4, dtype=np.float32)
+    target_mid = np.full((8, 8), 2, dtype=np.float32)
+    mask = np.ones((8, 8), dtype=np.float32)
+
+    fused = fuse_multiband_luminance_detail(
+        target,
+        source_fine,
+        source_mid,
+        mask,
+        fine_alpha=1.0,
+        mid_alpha=1.0,
+        fine_max_detail=18,
+        mid_max_detail=18,
+        target_fine_detail=target_fine,
+        target_mid_detail=target_mid,
+        mode="replace",
+    )
+
+    np.testing.assert_allclose(fused, np.full((8, 8), 114, dtype=np.float32))
 
 
 def test_build_feather_mask_has_soft_interior_edge():
@@ -218,3 +244,16 @@ def test_scale_detail_sigmas_increases_for_small_paste_size():
     assert scale == 2.0
     assert fine == 2.0
     assert mid == 7.0
+
+
+def test_mean_abs_diff_in_mask_uses_only_active_region():
+    a = np.zeros((4, 4, 3), dtype=np.uint8)
+    b = np.zeros((4, 4, 3), dtype=np.uint8)
+    b[:2, :2] = 9
+    b[2:, 2:] = 99
+    mask = np.zeros((4, 4), dtype=np.float32)
+    mask[:2, :2] = 1
+
+    mean_diff = mean_abs_diff_in_mask(a, b, mask)
+
+    assert mean_diff == 9.0
