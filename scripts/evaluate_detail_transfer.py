@@ -153,9 +153,12 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--samples", default="tests/samples", help="Directory with downloaded test images.")
     parser.add_argument("--out-dir", default="tests/eval_outputs", help="Output directory for generated cases.")
-    parser.add_argument("--alpha", type=float, default=0.28)
-    parser.add_argument("--detail-sigma", type=float, default=1.6)
-    parser.add_argument("--max-detail", type=float, default=18.0)
+    parser.add_argument("--fine-alpha", type=float, default=0.65)
+    parser.add_argument("--mid-alpha", type=float, default=0.30)
+    parser.add_argument("--fine-sigma", type=float, default=1.0)
+    parser.add_argument("--mid-sigma", type=float, default=3.5)
+    parser.add_argument("--fine-max-detail", type=float, default=18.0)
+    parser.add_argument("--mid-max-detail", type=float, default=18.0)
     parser.add_argument("--mask-erode", type=int, default=8)
     parser.add_argument("--mask-feather", type=int, default=36)
     parser.add_argument("--no-download", action="store_true", help="Do not download default NASA samples.")
@@ -183,9 +186,12 @@ def main() -> None:
             target,
             source_face,
             target_face,
-            alpha=args.alpha,
-            detail_sigma=args.detail_sigma,
-            max_detail=args.max_detail,
+            fine_alpha=args.fine_alpha,
+            mid_alpha=args.mid_alpha,
+            fine_sigma=args.fine_sigma,
+            mid_sigma=args.mid_sigma,
+            fine_max_detail=args.fine_max_detail,
+            mid_max_detail=args.mid_max_detail,
             mask_erode=args.mask_erode,
             mask_feather=args.mask_feather,
         )

@@ -46,6 +46,26 @@ def extract_luminance_detail(l_channel: np.ndarray, sigma: float) -> np.ndarray:
     return source - base
 
 
+def gaussian_base(l_channel: np.ndarray, sigma: float) -> np.ndarray:
+    source = l_channel.astype(np.float32)
+    sigma = max(0.1, float(sigma))
+    kernel = odd_kernel(int(round(sigma * 6)) + 1)
+    return cv2.GaussianBlur(source, (kernel, kernel), sigmaX=sigma, sigmaY=sigma)
+
+
+def extract_multiband_details(
+    l_channel: np.ndarray,
+    fine_sigma: float,
+    mid_sigma: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    source = l_channel.astype(np.float32)
+    fine_base = gaussian_base(source, fine_sigma)
+    mid_base = gaussian_base(source, mid_sigma)
+    fine_detail = source - fine_base
+    mid_detail = fine_base - mid_base
+    return fine_detail.astype(np.float32), mid_detail.astype(np.float32)
+
+
 def fuse_luminance_detail(
     target_l: np.ndarray,
     detail: np.ndarray,
@@ -57,6 +77,24 @@ def fuse_luminance_detail(
     clipped_detail = np.clip(detail.astype(np.float32), -max_detail, max_detail)
     soft_mask = np.clip(mask.astype(np.float32), 0.0, 1.0)
     fused = target + float(alpha) * soft_mask * clipped_detail
+    return np.clip(fused, 0, 255).astype(np.float32)
+
+
+def fuse_multiband_luminance_detail(
+    target_l: np.ndarray,
+    fine_detail: np.ndarray,
+    mid_detail: np.ndarray,
+    mask: np.ndarray,
+    fine_alpha: float,
+    mid_alpha: float,
+    fine_max_detail: float,
+    mid_max_detail: float,
+) -> np.ndarray:
+    target = target_l.astype(np.float32)
+    soft_mask = np.clip(mask.astype(np.float32), 0.0, 1.0)
+    fine = np.clip(fine_detail.astype(np.float32), -fine_max_detail, fine_max_detail)
+    mid = np.clip(mid_detail.astype(np.float32), -mid_max_detail, mid_max_detail)
+    fused = target + soft_mask * (float(fine_alpha) * fine + float(mid_alpha) * mid)
     return np.clip(fused, 0, 255).astype(np.float32)
 
 
@@ -266,9 +304,12 @@ def enhance_face_detail(
     target_bgr: np.ndarray,
     source_face: FaceInfo,
     target_face: FaceInfo,
-    alpha: float = 0.28,
-    detail_sigma: float = 1.6,
-    max_detail: float = 18.0,
+    fine_alpha: float = 0.65,
+    mid_alpha: float = 0.30,
+    fine_sigma: float = 1.0,
+    mid_sigma: float = 3.5,
+    fine_max_detail: float = 18.0,
+    mid_max_detail: float = 18.0,
     mask_erode: int = 8,
     mask_feather: int = 36,
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -292,13 +333,20 @@ def enhance_face_detail(
     face_mask_binary = cv2.bitwise_and(face_mask_binary, coverage)
     final_mask = build_feather_mask(face_mask_binary, erode_px=mask_erode, feather_px=mask_feather)
 
-    detail = extract_luminance_detail(warped_l, sigma=detail_sigma)
-    target_lab[:, :, 0] = fuse_luminance_detail(
+    fine_detail, mid_detail = extract_multiband_details(
+        warped_l,
+        fine_sigma=fine_sigma,
+        mid_sigma=mid_sigma,
+    )
+    target_lab[:, :, 0] = fuse_multiband_luminance_detail(
         target_l,
-        detail,
+        fine_detail,
+        mid_detail,
         final_mask,
-        alpha=alpha,
-        max_detail=max_detail,
+        fine_alpha=fine_alpha,
+        mid_alpha=mid_alpha,
+        fine_max_detail=fine_max_detail,
+        mid_max_detail=mid_max_detail,
     )
 
     enhanced = cv2.cvtColor(np.clip(target_lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
@@ -320,9 +368,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model-name", default="buffalo_l", help="InsightFace model pack name.")
     parser.add_argument("--providers", default="CPUExecutionProvider", help="ONNX Runtime providers.")
     parser.add_argument("--det-size", type=int, default=640, help="InsightFace detection size.")
-    parser.add_argument("--alpha", type=float, default=0.28, help="Simple source-detail transfer strength.")
-    parser.add_argument("--detail-sigma", type=float, default=1.6, help="Gaussian sigma for fine detail extraction.")
-    parser.add_argument("--max-detail", type=float, default=18.0, help="Clamp source detail magnitude in LAB-L units.")
+    parser.add_argument("--fine-alpha", type=float, default=0.65, help="Fine texture transfer strength.")
+    parser.add_argument("--mid-alpha", type=float, default=0.30, help="Mid-frequency structure transfer strength.")
+    parser.add_argument("--fine-sigma", type=float, default=1.0, help="Fine detail Gaussian sigma.")
+    parser.add_argument("--mid-sigma", type=float, default=3.5, help="Mid-frequency Gaussian sigma.")
+    parser.add_argument("--fine-max-detail", type=float, default=18.0, help="Clamp fine detail magnitude in LAB-L units.")
+    parser.add_argument("--mid-max-detail", type=float, default=18.0, help="Clamp mid detail magnitude in LAB-L units.")
     parser.add_argument("--mask-erode", type=int, default=8, help="Shrink face mask inward before feathering.")
     parser.add_argument("--mask-feather", type=int, default=36, help="Distance-transform feather size.")
     return parser
@@ -347,9 +398,12 @@ def main() -> None:
         target,
         source_face,
         target_face,
-        alpha=args.alpha,
-        detail_sigma=args.detail_sigma,
-        max_detail=args.max_detail,
+        fine_alpha=args.fine_alpha,
+        mid_alpha=args.mid_alpha,
+        fine_sigma=args.fine_sigma,
+        mid_sigma=args.mid_sigma,
+        fine_max_detail=args.fine_max_detail,
+        mid_max_detail=args.mid_max_detail,
         mask_erode=args.mask_erode,
         mask_feather=args.mask_feather,
     )

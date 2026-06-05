@@ -3,6 +3,8 @@ import numpy as np
 from face_detail_transfer import (
     build_feather_mask,
     extract_luminance_detail,
+    extract_multiband_details,
+    fuse_multiband_luminance_detail,
     fuse_luminance_detail,
 )
 
@@ -44,6 +46,37 @@ def test_fuse_luminance_detail_clamps_detail_without_extra_gain():
     fused = fuse_luminance_detail(target, detail, mask, alpha=0.5, max_detail=12)
 
     np.testing.assert_allclose(fused, np.full((16, 16), 106, dtype=np.float32))
+
+
+def test_extract_multiband_details_sum_matches_broad_detail():
+    image = np.zeros((64, 64), dtype=np.float32)
+    image[:, 32:] = 180
+    image[24:40, 24:40] = 255
+
+    fine, mid = extract_multiband_details(image, fine_sigma=1.0, mid_sigma=3.0)
+    broad = extract_luminance_detail(image, sigma=3.0)
+
+    np.testing.assert_allclose(fine + mid, broad, atol=1e-4)
+
+
+def test_fuse_multiband_luminance_detail_weights_and_clamps_bands_independently():
+    target = np.full((8, 8), 100, dtype=np.float32)
+    fine = np.full((8, 8), 30, dtype=np.float32)
+    mid = np.full((8, 8), 20, dtype=np.float32)
+    mask = np.ones((8, 8), dtype=np.float32)
+
+    fused = fuse_multiband_luminance_detail(
+        target,
+        fine,
+        mid,
+        mask,
+        fine_alpha=0.5,
+        mid_alpha=0.25,
+        fine_max_detail=12,
+        mid_max_detail=8,
+    )
+
+    np.testing.assert_allclose(fused, np.full((8, 8), 108, dtype=np.float32))
 
 
 def test_build_feather_mask_has_soft_interior_edge():
