@@ -160,6 +160,7 @@ def main() -> None:
     parser.add_argument("--mid-max-detail", type=float, default=18.0)
     parser.add_argument("--mask-erode", type=int, default=8)
     parser.add_argument("--mask-feather", type=int, default=36)
+    parser.add_argument("--mask-region-scale", type=float, default=0.85)
     parser.add_argument("--det-size", type=int, default=1024)
     parser.add_argument("--crop-det-size", type=int, default=512)
     parser.add_argument("--work-size", type=int, default=512)
@@ -198,6 +199,7 @@ def main() -> None:
             mid_max_detail=args.mid_max_detail,
             mask_erode=args.mask_erode,
             mask_feather=args.mask_feather,
+            mask_region_scale=args.mask_region_scale,
         )
         metrics = evaluate_pair(gt, target, enhanced, mask)
         stem = path.stem

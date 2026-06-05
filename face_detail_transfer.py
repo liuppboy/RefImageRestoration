@@ -113,6 +113,26 @@ def build_feather_mask(binary_mask: np.ndarray, erode_px: int, feather_px: int) 
     return mask.astype(np.float32)
 
 
+def build_plateau_blend_mask(binary_mask: np.ndarray, erode_px: int, feather_px: int) -> np.ndarray:
+    binary = (binary_mask > 0).astype(np.uint8)
+    if erode_px > 0:
+        k = odd_kernel(erode_px * 2 + 1)
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+        binary = cv2.erode(binary, kernel, iterations=1)
+
+    mask = binary.astype(np.float32)
+    if feather_px <= 0:
+        return mask
+
+    sigma = max(0.1, float(feather_px) / 3.0)
+    kernel = odd_kernel(int(round(sigma * 6)) + 1)
+    mask = cv2.GaussianBlur(mask, (kernel, kernel), sigmaX=sigma, sigmaY=sigma)
+    peak = float(mask.max())
+    if peak > 1e-6:
+        mask /= peak
+    return np.clip(mask, 0.0, 1.0).astype(np.float32)
+
+
 def load_insightface(model_name: str, models_dir: str | Path, det_size: int, providers: list[str]):
     try:
         from insightface.app import FaceAnalysis
@@ -374,6 +394,26 @@ def build_face_hull_mask(landmarks: np.ndarray, shape: tuple[int, int]) -> np.nd
     return mask
 
 
+def build_face_region_mask(face: FaceInfo, shape: tuple[int, int], bbox_scale: float = 0.85) -> np.ndarray:
+    h, w = shape[:2]
+    mask = build_face_hull_mask(face.landmarks, shape)
+    if bbox_scale <= 0:
+        return mask
+
+    x1, y1, x2, y2 = face.bbox.astype(np.float32)
+    cx = float((x1 + x2) * 0.5)
+    cy = float((y1 + y2) * 0.5)
+    bw = float((x2 - x1) * bbox_scale)
+    bh = float((y2 - y1) * bbox_scale)
+    center = (int(round(np.clip(cx, 0, w - 1))), int(round(np.clip(cy, 0, h - 1))))
+    axes = (
+        max(1, int(round(bw * 0.50))),
+        max(1, int(round(bh * 0.58))),
+    )
+    cv2.ellipse(mask, center, axes, 0, 0, 360, 255, thickness=-1, lineType=cv2.LINE_AA)
+    return mask
+
+
 def enhance_face_detail(
     source_bgr: np.ndarray,
     target_bgr: np.ndarray,
@@ -387,6 +427,7 @@ def enhance_face_detail(
     mid_max_detail: float = 18.0,
     mask_erode: int = 8,
     mask_feather: int = 36,
+    mask_region_scale: float = 0.85,
 ) -> tuple[np.ndarray, np.ndarray]:
     if source_bgr.shape[:2] != target_bgr.shape[:2]:
         source_bgr = cv2.resize(source_bgr, (target_bgr.shape[1], target_bgr.shape[0]), interpolation=cv2.INTER_CUBIC)
@@ -404,9 +445,9 @@ def enhance_face_detail(
     target_l = target_lab[:, :, 0]
     warped_l = warped_lab[:, :, 0]
 
-    face_mask_binary = build_face_hull_mask(target_face.landmarks, target_bgr.shape[:2])
+    face_mask_binary = build_face_region_mask(target_face, target_bgr.shape[:2], bbox_scale=mask_region_scale)
     face_mask_binary = cv2.bitwise_and(face_mask_binary, coverage)
-    final_mask = build_feather_mask(face_mask_binary, erode_px=mask_erode, feather_px=mask_feather)
+    final_mask = build_plateau_blend_mask(face_mask_binary, erode_px=mask_erode, feather_px=mask_feather)
 
     fine_detail, mid_detail = extract_multiband_details(
         warped_l,
@@ -443,6 +484,7 @@ def enhance_image_face_detail(
     mid_max_detail: float = 18.0,
     mask_erode: int = 8,
     mask_feather: int = 36,
+    mask_region_scale: float = 0.85,
 ) -> tuple[np.ndarray, np.ndarray]:
     crop_app = crop_app or app
     full_detectors = [app] if crop_app is app else [app, crop_app]
@@ -467,6 +509,7 @@ def enhance_image_face_detail(
         mid_max_detail=mid_max_detail,
         mask_erode=mask_erode,
         mask_feather=mask_feather,
+        mask_region_scale=mask_region_scale,
     )
     enhanced = paste_face_crop(target_bgr, enhanced_crop, crop_mask, target_box)
     full_mask = paste_mask(target_bgr.shape[:2], crop_mask, target_box)
@@ -498,7 +541,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fine-max-detail", type=float, default=18.0, help="Clamp fine detail magnitude in LAB-L units.")
     parser.add_argument("--mid-max-detail", type=float, default=18.0, help="Clamp mid detail magnitude in LAB-L units.")
     parser.add_argument("--mask-erode", type=int, default=8, help="Shrink face mask inward before feathering.")
-    parser.add_argument("--mask-feather", type=int, default=36, help="Distance-transform feather size.")
+    parser.add_argument("--mask-feather", type=int, default=36, help="Gaussian soft-edge feather size.")
+    parser.add_argument("--mask-region-scale", type=float, default=0.85, help="Optional bbox-ellipse face mask expansion. Use 0 for landmark hull only.")
     return parser
 
 
@@ -525,6 +569,7 @@ def main() -> None:
         mid_max_detail=args.mid_max_detail,
         mask_erode=args.mask_erode,
         mask_feather=args.mask_feather,
+        mask_region_scale=args.mask_region_scale,
     )
     write_image(args.out, enhanced)
     if args.mask_out:

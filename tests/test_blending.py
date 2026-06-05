@@ -1,7 +1,11 @@
 import numpy as np
 
 from face_detail_transfer import (
+    FaceInfo,
     build_feather_mask,
+    build_face_hull_mask,
+    build_face_region_mask,
+    build_plateau_blend_mask,
     crop_face_square,
     detect_largest_face_with_fallback,
     extract_luminance_detail,
@@ -108,6 +112,44 @@ def test_build_feather_mask_has_soft_interior_edge():
     assert mask[32, 32] > 0.95
     assert mask[16, 32] == 0
     assert 0 < mask[22, 32] < 1
+
+
+def test_build_plateau_blend_mask_keeps_most_interior_high_weight():
+    binary = np.zeros((64, 64), dtype=np.uint8)
+    binary[16:48, 16:48] = 255
+
+    mask = build_plateau_blend_mask(binary, erode_px=4, feather_px=12)
+
+    assert mask.dtype == np.float32
+    assert mask.min() >= 0
+    assert mask.max() <= 1
+    assert mask[32, 32] > 0.95
+    assert mask[24, 32] > 0.75
+    assert 0 < mask[15, 32] < 0.5
+
+
+def test_build_face_region_mask_expands_beyond_landmark_hull():
+    landmarks = np.asarray(
+        [
+            [30, 30],
+            [50, 30],
+            [55, 50],
+            [40, 62],
+            [25, 50],
+        ],
+        dtype=np.float32,
+    )
+    face = FaceInfo(
+        bbox=np.asarray([20, 18, 60, 66], dtype=np.float32),
+        landmarks=landmarks,
+    )
+
+    hull = build_face_hull_mask(landmarks, (96, 96))
+    region = build_face_region_mask(face, (96, 96))
+
+    assert region.sum() > hull.sum()
+    assert region[18, 40] > 0
+    assert region[90, 90] == 0
 
 
 def test_crop_face_square_returns_fixed_work_size_and_valid_box():

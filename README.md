@@ -30,6 +30,7 @@ python face_detail_transfer.py `
   --mid-sigma 3.5 `
   --fine-max-detail 18 `
   --mid-max-detail 18 `
+  --mask-region-scale 0.85 `
   --mask-erode 8 `
   --mask-feather 36
 ```
@@ -52,8 +53,9 @@ The default ONNX Runtime provider is CPU. If you install a compatible GPU build,
 - `--mid-sigma`: mid-frequency extraction sigma.
 - `--fine-max-detail`: clamps fine detail magnitude to reduce speckle and halos.
 - `--mid-max-detail`: clamps mid detail magnitude to reduce ghosting.
+- `--mask-region-scale`: expands the transfer mask with a small bbox-based face ellipse. Use `0` for landmark hull only.
 - `--mask-erode`: shrinks the target face mask inward before fusion.
-- `--mask-feather`: distance-transform feather width. Larger means softer boundaries.
+- `--mask-feather`: Gaussian soft-edge width. Larger means softer boundaries.
 - `--mask-out`: writes the final soft confidence mask for debugging.
 
 For a lighter pass:
@@ -77,7 +79,7 @@ python face_detail_transfer.py `
 3. Redetects landmarks inside the fixed crop at `--crop-det-size`.
 4. Uses 106-point landmarks and Delaunay triangles to locally warp the source face into target coordinates.
 5. Extracts fine and mid-frequency luminance detail from the warped source face.
-6. Builds a conservative target-face mask and softens it with distance-transform feathering.
+6. Builds a conservative target-face mask with a high-weight interior and Gaussian soft edges.
 7. Adds the source detail into the target LAB luminance channel through the soft face mask, then pastes the enhanced crop back.
 
 The target color, lighting, and low-frequency shape are preserved. Only matched face detail is transferred.
